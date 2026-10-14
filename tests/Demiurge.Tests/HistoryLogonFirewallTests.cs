@@ -113,10 +113,30 @@ public class HistoryLogonFirewallTests
         var b = new BinaryInfo { Path = @"C:\Users\a\AppData\Roaming\x\rat.exe", Sha256 = "f00", Signature = new SignatureInfo { IsSigned = false } };
         s.Binaries[b.Key] = b;
         s.FirewallRules.Add(new FirewallRule { Id = "1", Name = "Windows Update Helper", Action = "Allow", Direction = "In", Active = true, App = b.Path, LocalPorts = "4444", BinaryKey = b.Key });
+
+        // Sólo la regla (el programa no corre): informativo.
         Analyze(s);
         Assert.Contains(s.Findings, f => f.HeuristicId == "H-37");
-        // Sin firma + carpeta de usuario + regla de firewall: tres categorías distintas sobre el mismo binario.
+        Assert.Equal(EntityLevel.Info, s.Scores.Single(x => x.ScoringKey == b.Key).Level);
+
+        // Patrón de RAT activo: corriendo + sin firma + carpeta de usuario + regla de firewall → "Revisar".
+        s.Processes.Add(new ProcessInfo { Pid = 4321, Name = "rat.exe", Path = b.Path, BinaryKey = b.Key });
+        Analyze(s);
         Assert.Equal(EntityLevel.Revisar, s.Scores.Single(x => x.ScoringKey == b.Key).Level);
+    }
+
+    [Fact]
+    public void Unsigned_game_with_steam_firewall_rule_is_not_flagged()
+    {
+        // Regresión de calibración: juegos sin firma en la biblioteca de Steam con reglas de entrada del firewall.
+        var s = new ScanSnapshot();
+        var b = new BinaryInfo { Path = @"D:\SteamLibrary\steamapps\common\Raft\Raft.exe", Sha256 = "a1", Signature = new SignatureInfo { IsSigned = false } };
+        s.Binaries[b.Key] = b;
+        s.FirewallRules.Add(new FirewallRule { Id = "1", Name = "Raft", Action = "Allow", Direction = "In", Active = true, App = b.Path, BinaryKey = b.Key });
+        s.Executions.Add(new ExecutionRecord { Path = b.Path, Name = "Raft.exe", Exists = true, LastRun = DateTimeOffset.Now.AddDays(-2), BinaryKey = b.Key });
+        Analyze(s);
+        Assert.Equal(GlobalVerdict.Limpio, s.Verdict);
+        Assert.DoesNotContain(s.Findings, f => f.HeuristicId is "H-37" or "H-03");
     }
 
     [Fact]

@@ -549,11 +549,12 @@ heuristics:
 
   - id: H-37
     name: Regla de firewall que deja entrar a un programa sospechoso
-    # 20 y no más: aceptar el aviso del firewall de un juego o herramienta sin firma crea una regla así.
-    weight: 20
+    # 15: sola queda informativa (Minecraft/Java en AppData también tiene reglas así). Sumada a que el programa corre
+    # o arranca solo (sin firma + carpeta de usuario = 25), pasa a "Revisar": el patrón de un RAT activo.
+    weight: 15
     severity: Media
     attack: [T1562.004]
     category: firewall
     phase: v2
-    template: 'Hay una regla en el firewall ("{regla}") que deja que "{nombre}" reciba conexiones desde afuera ({puertos}). Los programas que controlan una PC a distancia se agregan reglas así.'
+    template: 'Hay una regla en el firewall ("{regla}") que deja que "{nombre}", un programa sin firma instalado en una carpeta de usuario, reciba conexiones desde afuera ({puertos}). Los programas que controlan una PC a distancia se agregan reglas así.'
     action: Si no reconocés el programa, desactivá la regla (Firewall de Windows → Configuración avanzada → Reglas de entrada).

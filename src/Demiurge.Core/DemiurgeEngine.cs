@@ -378,7 +378,7 @@ public sealed class DemiurgeEngine : IAsyncDisposable
         defenderAvailable = DefenderScanner.Locate() is not null,
         yaraX = new { Options.YaraX.Enabled, path = ExternalRunner.ResolvePath(Options.YaraX), pinned = Options.YaraX.ExpectedSha256 is not null || ToolLock.Get(Options.YaraX.LockId) is not null, rules = YaraXScanner.HasRules(Options) },
         hollowsHunter = new { Options.HollowsHunter.Enabled, path = ExternalRunner.ResolvePath(Options.HollowsHunter), pinned = Options.HollowsHunter.ExpectedSha256 is not null || ToolLock.Get(Options.HollowsHunter.LockId) is not null },
-        hayabusa = new { Options.Hayabusa.Enabled, path = ExternalRunner.ResolvePath(Options.Hayabusa), pinned = Options.Hayabusa.ExpectedSha256 is not null },
+        hayabusa = new { Options.Hayabusa.Enabled, path = ExternalRunner.ResolvePath(Options.Hayabusa), pinned = Options.Hayabusa.ExpectedSha256 is not null || ToolLock.Get(Options.Hayabusa.LockId) is not null },
         Options.SysmonOptIn,
         Options.AllowUnelevatedReads,
     };

@@ -31,6 +31,7 @@ public static class ScanDiff
     [
         EntityKind.Persistence, EntityKind.InstalledSoftware, EntityKind.Extension, EntityKind.Account,
         EntityKind.Certificate, EntityKind.Driver, EntityKind.BrowserSetting, EntityKind.SystemSetting,
+        EntityKind.FirewallRule,
     ];
 
     public static DiffReport Compute(ScanSnapshot current, ScanSnapshot? previous, TextCatalog text)
@@ -76,6 +77,7 @@ public static class ScanDiff
         EntityKind.Account => s.Accounts,
         EntityKind.Certificate => s.Certificates,
         EntityKind.Driver => s.Drivers,
+        EntityKind.FirewallRule => s.FirewallRules.Where(r => !r.BuiltIn),
         EntityKind.BrowserSetting => s.BrowserSettings,
         // Sólo configuración relevante a infección (hosts, DNS, proxy, exclusiones), no la postura cambiante.
         EntityKind.SystemSetting => s.Settings.Where(x => x.Category == "infection"),
@@ -91,6 +93,7 @@ public static class ScanDiff
         SystemSetting st => $"{st.Name}: {st.Value}",
         BrowserSettingInfo bs => $"{bs.Browser}: {bs.Setting} = {bs.Value}",
         DriverInfo d => d.Path,
+        FirewallRule r => $"{r.Action} {r.Direction} {r.App ?? r.LocalPorts}",
         _ => null,
     };
 }

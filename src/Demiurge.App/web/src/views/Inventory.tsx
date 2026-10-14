@@ -6,7 +6,7 @@ import type { InventoryRow } from "../types";
 const TABS: [string, string][] = [
   ["startup", "Arranque"], ["processes", "Procesos"], ["connections", "Conexiones"], ["extensions", "Extensiones"],
   ["software", "Programas"], ["accounts", "Cuentas"], ["certificates", "Certificados"], ["drivers", "Controladores"],
-  ["files", "Archivos recientes"], ["settings", "Configuración"],
+  ["files", "Archivos recientes"], ["history", "Historial"], ["logons", "Inicios de sesión"], ["firewall", "Firewall"], ["settings", "Configuración"],
 ];
 
 export function Inventory({ version }: { version: number }) {

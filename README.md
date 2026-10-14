@@ -70,6 +70,10 @@ Demiurge junta lo que encuentran varias herramientas y lo explica en una sola ta
 | Listas de amenazas (abuse.ch, etc.) | "Habla con un servidor denunciado", "es un hash conocido" | Siempre |
 | **YARA-X + YARA Forge** (incluido) | "Tiene rasgos de la familia X": miles de reglas curadas, que se actualizan solas cada semana | Programas en ejecución, arranque, descargas y sospechosos (escaneo profundo: todo lo que no firma Microsoft) |
 | **HollowsHunter** (incluido) | "Algo se inyectó en la memoria de este programa" | Procesos sospechosos (escaneo profundo: todos) |
+| **Hayabusa** (incluido, edición live-response) | Miles de reglas Sigma sobre todos los registros de eventos de Windows (H-31) | Cada escaneo: últimos 7 días (profundo: 30). Necesita administrador |
+| Historial de ejecución (BAM, UserAssist, PCA, Prefetch) | Qué se ejecutó aunque ya no exista: "se ejecutó desde AppData y desapareció" (H-34), "factura.pdf.exe se ejecutó" (H-21) | Siempre (BAM y Prefetch necesitan administrador) |
+| Inicios de sesión | Escritorio remoto, con pregunta "¿fuiste vos?" (H-35), y contraseñas probadas por fuerza bruta (H-36) | Siempre (necesita administrador) |
+| Reglas del firewall | Programa sin firma en una carpeta de usuario con una regla para recibir conexiones (H-37) | Siempre |
 | **Microsoft Defender** (el de Windows) | "Defender confirma que es Trojan:Win32/…" (H-32), y su historial: "lo detectó el martes y el archivo sigue ahí" (H-33) | Sobre lo que quedó sospechoso y lo que marcó YARA, con `-DisableRemediation`: no borra nada por su cuenta |
 
 **Cuando los motores no coinciden, se baja la alarma.** Si YARA marca algo pero Defender lo analizó y no encontró nada, la señal pesa mucho menos y la tarjeta lo dice: "puede ser un falso positivo". Si además el archivo tiene firma válida, queda como informativo. Las reglas de baja confianza (score de YARA Forge menor a 70, o reglas `CAPE_*` pensadas para memoria) también pesan menos.
@@ -119,6 +123,7 @@ Tests: `tests/Demiurge.Tests/SecurityTests.cs` intenta los ataques de verdad (ju
 |---|---|
 | Extensiones internas de Firefox (`app-builtin-addons`) | Se excluyen `app-builtin*` y `app-system*` |
 | Sin admin, Defender devuelve "N/A: Must be an administrator…" como exclusión | Se filtran esos valores |
+| 40 juegos de Steam sin firma salían "Revisar" por reglas del firewall | El historial y el firewall no cuentan como "activos"; H-37 exige sin firma + carpeta de usuario y pesa 15 |
 | `Spotify.dll` salía Peligroso por la regla YARA `CAPE_Bumblebee` (Defender lo dio por limpio) | Contraste YARA ↔ Defender ↔ firma; reglas `CAPE_*` como baja confianza |
 | `files.pythonhosted.org` y `cdn.jsdelivr.net` salían Peligroso (URLhaus lista URLs en hostings compartidos) | En hostings y CDNs compartidos se matchea sólo la URL exacta (`SharedHosts`) |
 | Apps firmadas instaladas por usuario (Notion, Battle.net) disparaban H-08 | `signed_user_folder_counts: false` |

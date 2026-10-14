@@ -61,8 +61,9 @@ public static class Heuristics
         foreach (var p in ctx.Snapshot.Persistence) if (p.BinaryKey is not null) set.Add(p.BinaryKey);
         foreach (var m in ctx.Snapshot.ModuleLoads) if (m.BinaryKey is not null) set.Add(m.BinaryKey);
         foreach (var d in ctx.Snapshot.Drivers) if (d.BinaryKey is not null) set.Add(d.BinaryKey);
-        foreach (var x in ctx.Snapshot.Executions) if (x.BinaryKey is not null) set.Add(x.BinaryKey);
-        foreach (var r in ctx.Snapshot.FirewallRules) if (r.BinaryKey is not null) set.Add(r.BinaryKey);
+        // El historial de ejecución y las reglas de firewall NO cuentan como "activos": lo que corrió alguna vez o tiene una
+        // regla no está corriendo ni arrancando solo (calibración 14/10/2026: 40 juegos de Steam sin firma salían "Revisar").
+        // Se revisan igual con YARA y con sus propias reglas (H-21, H-34, H-37).
         return set;
     }
 
@@ -951,7 +952,7 @@ public static class Heuristics
     }
 
     // ---------------------------------------------------------------- H-37
-    /// <summary>Regla del firewall (que no es de Windows) que deja entrar conexiones a un programa sin firma o en una carpeta de usuario.</summary>
+    /// <summary>Regla del firewall (que no es de Windows) que deja entrar conexiones a un programa sin firma instalado en una carpeta de usuario.</summary>
     private static void H37_FirewallAllowsSuspicious(RuleContext ctx, HeuristicDefinition def)
     {
         foreach (var r in ctx.Snapshot.FirewallRules.Where(r => r.Active && r.Action == "Allow" && r.Direction == "In" && !r.BuiltIn))
@@ -960,7 +961,9 @@ public static class Heuristics
             if (b is null || ctx.IsHardAllowlisted(b)) continue;
             bool unsigned = ctx.IsUnsigned(b);
             var folder = PathClassifier.UserWritableFolder(b.Path);
-            if (!unsigned && folder is null) continue;
+            // Las dos cosas juntas: muchísimos juegos no tienen firma y Steam les abre el firewall, pero se instalan en
+            // Program Files o en la biblioteca de Steam, no en AppData/Temp/Descargas como el malware.
+            if (!unsigned || folder is null) continue;
             ctx.Emit(def, r, b.Key,
                 new() { ["nombre"] = b.DisplayName, ["regla"] = r.Name, ["puertos"] = r.LocalPorts ?? "cualquier puerto" },
                 Raw(("rule", r.Name), ("app", r.App), ("ports", r.LocalPorts), ("protocol", r.Protocol), ("profiles", r.Profiles), ("store", r.Store), ("unsigned", unsigned), ("folder", folder)));

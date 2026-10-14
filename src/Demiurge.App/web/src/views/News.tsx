@@ -5,7 +5,7 @@ import type { DiffReport } from "../types";
 
 const KIND: Record<string, string> = {
   Persistence: "Programa de arranque", InstalledSoftware: "Programa instalado", Extension: "Extensión", Account: "Cuenta",
-  Certificate: "Certificado", Driver: "Controlador", SystemSetting: "Configuración", BrowserSetting: "Navegador",
+  Certificate: "Certificado", Driver: "Controlador", SystemSetting: "Configuración", BrowserSetting: "Navegador", FirewallRule: "Regla de firewall",
 };
 
 export function News({ version }: { version: number }) {

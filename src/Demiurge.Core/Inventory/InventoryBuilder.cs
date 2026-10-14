@@ -25,7 +25,7 @@ public sealed class InventoryRow
 /// </summary>
 public sealed class InventoryBuilder
 {
-    public static readonly string[] Tabs = ["startup", "processes", "connections", "extensions", "software", "accounts", "settings", "certificates", "drivers", "files"];
+    public static readonly string[] Tabs = ["startup", "processes", "connections", "extensions", "software", "accounts", "settings", "certificates", "drivers", "files", "history", "logons", "firewall"];
 
     private readonly KnowledgeBase _kb;
     private readonly TextCatalog _text;
@@ -122,6 +122,9 @@ public sealed class InventoryBuilder
                 cols: new() { ["estado"] = d.State, ["inicio"] = d.StartMode })),
             "files" => s.RecentFiles.OrderByDescending(f => f.Modified).Select(f => Row(s, f, f.BinaryKey, f.DisplayName, f.Modified.ToString("dd/MM/yyyy HH:mm"), f.Path, scoreByKey, entityScore,
                 cols: new() { ["descargado de"] = f.HostUrl, ["zona"] = f.ZoneId?.ToString(), ["doble extensión"] = f.DoubleExtension ? "sí" : null, ["tamaño"] = $"{f.Size / 1024} KB" })),
+            "history" => History(s, scoreByKey, entityScore),
+            "logons" => Logons(s, entityScore),
+            "firewall" => Firewall(s, scoreByKey, entityScore),
             _ => [],
         };
 
@@ -165,6 +168,98 @@ public sealed class InventoryBuilder
             Columns = cols,
         };
     }
+
+    /// <summary>Historial de ejecución: lo más reciente primero; lo que ya no existe y estaba en carpetas de usuario, resaltado.</summary>
+    private IEnumerable<InventoryRow> History(ScanSnapshot s, Dictionary<string, EntityScore> scores, Dictionary<string, int> entityScore) =>
+        s.Executions.OrderByDescending(x => x.LastRun ?? DateTimeOffset.MinValue).Take(1500).Select(x =>
+        {
+            var when = x.LastRun is null ? "fecha desconocida" : x.LastRun.Value.ToLocalTime().ToString("dd/MM/yyyy HH:mm");
+            var detail = $"Última vez: {when}" + (x.RunCount is > 0 ? $" · {x.RunCount} vez/veces" : "") + $" · {string.Join(", ", x.Sources)}";
+            if (x.BinaryKey is not null && x.Exists == true)
+            {
+                var row = Row(s, x, x.BinaryKey, x.Name, detail, x.Path, scores, entityScore, new() { ["usuario"] = x.User });
+                row.WhatIsIt = $"Se ejecutó en esta PC. {row.WhatIsIt}";
+                return row;
+            }
+            var gone = x.Exists == false;
+            var userFolder = Util.PathClassifier.UserWritableFolder(x.Path);
+            var score = entityScore.GetValueOrDefault(x.Key);
+            return new InventoryRow
+            {
+                Key = x.Key, Name = x.Name, Detail = detail, Path = x.Path,
+                WhatIsIt = x.Path is null ? "Se ejecutó en esta PC (Windows sólo guardó el nombre)." : "Se ejecutó en esta PC.",
+                IsItNormal = gone && userFolder is not null ? $"Ya no está en el disco y corría desde {userFolder}: si no recordás haberlo ejecutado, revisalo."
+                    : gone ? "Ya no está en el disco (lo desinstalaste o se actualizó)."
+                    : Util.PathClassifier.IsInWindowsDir(x.Path) ? "Es parte de Windows." : "Normal si lo usás.",
+                Status = score > 0 ? StatusFor(score, null) : gone && userFolder is not null ? "info" : "ok",
+                Score = score,
+                Columns = new() { ["usuario"] = x.User },
+            };
+        });
+
+    /// <summary>Inicios de sesión por Escritorio remoto e intentos fallidos, agrupados.</summary>
+    private IEnumerable<InventoryRow> Logons(ScanSnapshot s, Dictionary<string, int> entityScore)
+    {
+        var rows = new List<InventoryRow>();
+        foreach (var g in s.Events.Where(e => e.EventId == 4624).GroupBy(e => (u: e.Data.GetValueOrDefault("TargetUserName") ?? "?", ip: e.Data.GetValueOrDefault("IpAddress") ?? "-")))
+        {
+            var key = $"logon:rdp:{g.Key.u}|{g.Key.ip}".ToLowerInvariant();
+            var last = g.Max(e => e.Timestamp).ToLocalTime();
+            rows.Add(new InventoryRow
+            {
+                Key = key, Name = $"Escritorio remoto: {g.Key.u}", Detail = $"Desde {g.Key.ip} · {g.Count()} vez/veces · última {last:dd/MM/yyyy HH:mm}",
+                WhatIsIt = "Alguien inició sesión en esta PC a distancia.",
+                IsItNormal = "Normal sólo si fuiste vos o alguien de confianza.",
+                Status = "question", Score = 0,
+                Columns = new(),
+            });
+        }
+        foreach (var g in s.Events.Where(e => e.EventId == 4625).GroupBy(e => e.Data.GetValueOrDefault("IpAddress") is { Length: > 1 } ip && ip != "127.0.0.1" ? ip : "esta PC"))
+        {
+            var accounts = string.Join(", ", g.Select(e => e.Data.GetValueOrDefault("TargetUserName")).Where(a => !string.IsNullOrEmpty(a)).Distinct().Take(4));
+            var key = $"logon:failures:{(g.Key == "esta PC" ? "local" : g.Key)}".ToLowerInvariant();
+            var score = entityScore.GetValueOrDefault(key);
+            rows.Add(new InventoryRow
+            {
+                Key = key, Name = $"Contraseña incorrecta: {g.Key}", Detail = $"{g.Count()} intento(s) fallido(s) · cuentas: {accounts}",
+                WhatIsIt = "Intentos de iniciar sesión con una contraseña equivocada.",
+                IsItNormal = g.Count() < 10 ? "Unos pocos son normales (un PIN mal tipeado)." : "Muchos intentos seguidos pueden ser alguien tratando de adivinar la contraseña.",
+                Status = score > 0 ? StatusFor(score, null) : g.Count() >= 10 ? "info" : "ok",
+                Score = score,
+                Columns = new(),
+            });
+        }
+        if (rows.Count == 0)
+            rows.Add(new InventoryRow { Key = "logons-none", Name = "Sin accesos remotos ni contraseñas fallidas", WhatIsIt = "En los últimos días no hubo inicios de sesión por Escritorio remoto ni intentos fallidos registrados.", IsItNormal = "Sí. (Requiere permisos de administrador para leer el registro de seguridad.)", Status = "ok", Columns = new() });
+        return rows;
+    }
+
+    /// <summary>Reglas del firewall que no son de Windows; primero las que permiten conexiones entrantes.</summary>
+    private IEnumerable<InventoryRow> Firewall(ScanSnapshot s, Dictionary<string, EntityScore> scores, Dictionary<string, int> entityScore) =>
+        s.FirewallRules.Where(r => !r.BuiltIn)
+            .OrderByDescending(r => r.Active && r.Action == "Allow" && r.Direction == "In")
+            .ThenBy(r => r.Name)
+            .Select(r =>
+            {
+                var what = $"{(r.Action == "Allow" ? "Permite" : "Bloquea")} conexiones {(r.Direction == "In" ? "entrantes" : "salientes")}" +
+                           (r.LocalPorts is null ? "" : $" · puertos {r.LocalPorts}") + (r.Active ? "" : " · desactivada") + (r.Store == "policy" ? " · por política" : "");
+                if (r.BinaryKey is not null)
+                {
+                    var row = Row(s, r, r.BinaryKey, r.Name, what, r.App, scores, entityScore, new() { ["protocolo"] = r.Protocol, ["perfiles"] = r.Profiles });
+                    row.WhatIsIt = $"Regla del firewall para este programa. {row.WhatIsIt}";
+                    return row;
+                }
+                var score = entityScore.GetValueOrDefault(r.Key);
+                return new InventoryRow
+                {
+                    Key = r.Key, Name = r.Name, Detail = what, Path = r.App ?? r.Service,
+                    WhatIsIt = "Regla del firewall creada por un programa o por vos.",
+                    IsItNormal = r.Action == "Allow" && r.Direction == "In" && r.Active ? "Abre la PC a conexiones desde afuera: normal si es de un programa que usás (juegos, herramientas de red)." : "Sí.",
+                    Status = score > 0 ? StatusFor(score, null) : "ok",
+                    Score = score,
+                    Columns = new() { ["protocolo"] = r.Protocol, ["perfiles"] = r.Profiles },
+                };
+            });
 
     private static string StatusFor(int score, KnowledgeEntry? kb) =>
         score >= 60 ? "danger" : score >= 20 ? "review" : kb?.Risk == "question" ? "question" : kb?.Risk is "pup" or "suspicious" ? "review" : score > 0 ? "info" : "ok";

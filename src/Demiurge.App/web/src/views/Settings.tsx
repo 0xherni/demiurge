@@ -97,6 +97,13 @@ export function Settings() {
           </div>
           <Switch label="Análisis de memoria" checked={cfg.hollowsHunter.enabled} disabled={!cfg.hollowsHunter.path || !cfg.hollowsHunter.pinned} onChange={(v) => save({ hollowsHunterEnabled: v })} />
         </div>
+        <div className="set">
+          <div>
+            <strong>Revisión de los registros de eventos (Sigma)</strong>
+            <p>Revisa todos los registros de Windows con miles de reglas de la comunidad (Hayabusa): últimos 7 días en cada escaneo, 30 en el profundo. Necesita permisos de administrador. {cfg.hayabusa.path ? "Incluido con Demiurge." : "No se encontró la herramienta: reinstalá Demiurge."}</p>
+          </div>
+          <Switch label="Revisión de registros" checked={cfg.hayabusa.enabled} disabled={!cfg.hayabusa.path} onChange={(v) => save({ hayabusaEnabled: v })} />
+        </div>
       </div>
       <p className="honest">Demiurge no deja nada corriendo en segundo plano: cuando cerrás la ventana, no queda ningún proceso activo. Para revisar la PC de nuevo, abrí la app y escaneá.</p>
     </section>

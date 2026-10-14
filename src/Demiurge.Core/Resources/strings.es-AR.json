@@ -119,6 +119,7 @@
   "diff.Driver": "controlador(es) nuevo(s)",
   "diff.SystemSetting": "cambio(s) de configuración",
   "diff.BrowserSetting": "cambio(s) en el navegador",
+  "diff.FirewallRule": "regla(s) de firewall nueva(s)",
 
   "live.process": "Un programa nuevo empezó a ejecutarse",
   "live.connection": "Un programa se conectó a un destino sospechoso",
