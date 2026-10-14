@@ -1,0 +1,21 @@
+<Project Sdk="WixToolset.Sdk/6.0.2">
+  <!--
+    Instalador MSI de Demiurge (un solo archivo: DemiurgeSetup.msi).
+    Antes de compilarlo hay que publicar la app: ver build-installer.ps1 en la raíz del repo.
+  -->
+  <PropertyGroup>
+    <OutputName>DemiurgeSetup</OutputName>
+    <Platform>x64</Platform>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <Cultures>es-ES</Cultures>
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\publish\</PublishDir>
+    <DefineConstants>PublishDir=$(PublishDir);Version=$(ProductVersion)</DefineConstants>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.1.0</ProductVersion>
+    <SuppressIces>ICE61;ICE60</SuppressIces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="6.0.2" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="6.0.2" />
+  </ItemGroup>
+</Project>

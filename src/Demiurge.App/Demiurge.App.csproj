@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Demiurge</AssemblyName>
+    <RootNamespace>Demiurge.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\demiurge.ico</ApplicationIcon>
+    <Version>0.1.0</Version>
+    <Product>Demiurge</Product>
+    <Description>Visibilidad de seguridad para tu PC</Description>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <!-- El frontend (node_modules) no es parte del proyecto .NET. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);web\**;Assets\*.py</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Demiurge.Core\Demiurge.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\demiurge.ico" />
+  </ItemGroup>
+
+  <!--
+    Interfaz (React + TypeScript en web/). Se compila con npm y se copia a wwwroot/ junto al ejecutable.
+    En Release siempre se recompila; en Debug sólo si no existe todavía.
+  -->
+  <Target Name="BuildFrontend" Condition="'$(Configuration)' == 'Release' Or !Exists('web\dist\index.html')">
+    <Exec Command="npm ci --no-audit --no-fund" WorkingDirectory="web" Condition="!Exists('web\node_modules')" />
+    <Exec Command="npm run build" WorkingDirectory="web" />
+  </Target>
+
+  <!-- Siempre corre (después de compilar la interfaz si hacía falta): los nombres llevan hash, así que se toman en el momento. -->
+  <Target Name="IncludeFrontend" BeforeTargets="AssignTargetPaths" DependsOnTargets="BuildFrontend">
+    <ItemGroup>
+      <_FrontendFile Include="web\dist\**\*" />
+      <Content Include="@(_FrontendFile)" Link="wwwroot\%(_FrontendFile.RecursiveDir)%(_FrontendFile.Filename)%(_FrontendFile.Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
+</Project>

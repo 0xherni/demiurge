@@ -1,0 +1,72 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <!--
+    Demiurge se instala en Program Files (sólo administradores pueden escribir ahí: nadie puede reemplazar el
+    ejecutable que después corre elevado). No instala servicios ni tareas programadas: no queda nada corriendo.
+  -->
+  <Package Name="Demiurge"
+           Manufacturer="Demiurge"
+           Version="$(var.Version)"
+           UpgradeCode="5C7E2B4A-9D1F-4E6B-A0C3-7F2D8B9E1A44"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <SummaryInformation Description="Demiurge: visibilidad de seguridad para tu PC" Manufacturer="Demiurge" />
+
+    <MajorUpgrade DowngradeErrorMessage="Ya hay instalada una versión más nueva de Demiurge." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Ícono en "Aplicaciones instaladas" -->
+    <Icon Id="DemiurgeIcon" SourceFile="..\src\Demiurge.App\Assets\demiurge.ico" />
+    <Property Id="ARPPRODUCTICON" Value="DemiurgeIcon" />
+    <Property Id="ARPCOMMENTS" Value="Versión beta. Herramienta de visibilidad: no reemplaza al antivirus." />
+
+    <!-- Requisitos: Windows 10 o superior de 64 bits y Microsoft Edge WebView2 Runtime (viene con Windows 11). -->
+    <Launch Condition="Installed OR VersionNT64 &gt;= 603" Message="Demiurge necesita Windows 10 o superior de 64 bits." />
+    <Property Id="WEBVIEW2_MACHINE">
+      <RegistrySearch Root="HKLM" Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" Name="pv" Type="raw" />
+    </Property>
+    <Property Id="WEBVIEW2_USER">
+      <RegistrySearch Root="HKCU" Key="Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" Name="pv" Type="raw" />
+    </Property>
+    <Launch Condition="Installed OR WEBVIEW2_MACHINE OR WEBVIEW2_USER"
+            Message="Demiurge necesita Microsoft Edge WebView2 Runtime. Viene incluido en Windows 11 y en Windows 10 actualizado; si no lo tenés, descargalo gratis desde el sitio de Microsoft (buscá 'WebView2 Runtime') y volvé a ejecutar este instalador." />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Demiurge" />
+    </StandardDirectory>
+
+    <!-- Todo lo publicado por dotnet publish (app autocontenida: no hace falta instalar .NET). -->
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.PublishDir)**" />
+    </ComponentGroup>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="B8E3F1D2-6A4C-4F7E-9B21-3C5D7E9F0A12">
+        <Shortcut Id="DemiurgeStartMenu" Name="Demiurge" Description="Revisá si tu PC tiene señales de infección"
+                  Target="[INSTALLFOLDER]Demiurge.exe" WorkingDirectory="INSTALLFOLDER" Icon="DemiurgeIcon" />
+        <RegistryValue Root="HKCU" Key="Software\Demiurge" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="E2A9C7B4-1F3D-4B6E-8C05-9D7F2E4A6B31" Condition="ADD_DESKTOP_SHORTCUT">
+        <Shortcut Id="DemiurgeDesktop" Name="Demiurge" Target="[INSTALLFOLDER]Demiurge.exe" WorkingDirectory="INSTALLFOLDER" Icon="DemiurgeIcon" />
+        <RegistryValue Root="HKCU" Key="Software\Demiurge" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+    <Property Id="ADD_DESKTOP_SHORTCUT" Value="1" />
+
+    <Feature Id="Main" Title="Demiurge" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+
+    <!-- Pantallas del instalador: bienvenida + licencia (con el aviso de beta) + progreso. -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+  </Package>
+</Wix>

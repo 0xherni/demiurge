@@ -1,0 +1,27 @@
+{
+  "_comment": "Herramientas externas que vienen incluidas en el instalador. build-installer.ps1 las descarga, verifica zipSha256 y exeSha256, y las copia a tools\\<dir>. La app sólo las ejecuta si el hash del exe coincide con exeSha256.",
+  "tools": {
+    "yarax": {
+      "name": "YARA-X",
+      "version": "1.21.0",
+      "url": "https://github.com/VirusTotal/yara-x/releases/download/v1.21.0/yara-x-v1.21.0-x86_64-pc-windows-msvc.zip",
+      "zipSha256": "0e2fc4d2f64df3eaa22129ad5bd074c968a5d80766ddec6183b73175e5c9da25",
+      "dir": "yara-x",
+      "exe": "yr.exe",
+      "exeSha256": "883c56964e0ffbe25eb0daf5b443914bea9db45d8dc4b6be7abbe59ff6797557",
+      "license": "BSD-3-Clause",
+      "licenseUrl": "https://raw.githubusercontent.com/VirusTotal/yara-x/v1.21.0/LICENSE"
+    },
+    "hollowshunter": {
+      "name": "HollowsHunter (PE-sieve)",
+      "version": "0.4.1.1",
+      "url": "https://github.com/hasherezade/hollows_hunter/releases/download/v0.4.1.1/hollows_hunter64.zip",
+      "zipSha256": "00bff71b46f81f1c5f5d6c64fe8682a695a435d00e9b84112d79be05f8e1140c",
+      "dir": "hollows_hunter",
+      "exe": "hollows_hunter.exe",
+      "exeSha256": "56a58a8bbf2cec9a5c7c68129e8863af6181fb51dfc25226f1a756aba66b4707",
+      "license": "BSD-2-Clause",
+      "licenseUrl": "https://raw.githubusercontent.com/hasherezade/hollows_hunter/v0.4.1.1/LICENSE"
+    }
+  }
+}

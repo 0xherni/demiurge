@@ -1,0 +1,500 @@
+# Heurísticas de Demiurge (05_Heuristicas).
+# Pesos y umbrales = PROPUESTA INICIAL, no valores validados. Calibrar con PCs reales limpias
+# (medir ruido) y VMs con muestras (medir detección) antes de cada release.
+#
+# Para ajustar sin recompilar: copiar este archivo a %ProgramData%\Demiurge\rules\heuristics.yaml.
+# La lógica de cada condición vive en C# (Rules/Evaluators); acá se definen pesos, textos y parámetros.
+# Las plantillas usan {placeholders} que se completan con datos de la entidad.
+
+version: 2026.10.1
+
+# 06_Scoring: umbrales por entidad y bonus de acumulación.
+scoring:
+  review_min: 20          # 0–19 Info (sólo inventario) · 20–59 Revisar · ≥ 60 Peligroso
+  danger_min: 60
+  accumulation_bonus: 0.20
+  accumulation_min_categories: 3
+  hard_allowlist_ignores: [H-03, H-04, H-14]
+  never_ignore: [H-01, H-02, H-26, H-27, H-32, H-33]
+
+heuristics:
+  - id: H-01
+    name: Hash malicioso conocido
+    weight: 100
+    severity: Critica
+    attack: []
+    category: reputation
+    phase: v1
+    template: '"{nombre}" es un programa malicioso conocido: ya fue reportado por investigadores de seguridad como {familia}.'
+    action: Desconectá la PC de internet, seguí los pasos de limpieza y cambiá tus contraseñas desde otro dispositivo.
+
+  - id: H-02
+    name: Conexión a infraestructura maliciosa
+    weight: 60
+    severity: Alta
+    attack: [T1071]
+    category: network
+    phase: v1
+    template: '"{nombre}" se está comunicando con {destino}, una dirección que otros ya denunciaron por {categoria}.'
+    action: Desconectá la PC de internet y revisá el programa asociado.
+
+  - id: H-03
+    name: Binario sin firma
+    weight: 10
+    severity: Info
+    attack: [T1036]
+    category: signature
+    phase: v1
+    template: '"{nombre}" no tiene firma digital: ningún fabricante se hace responsable de él. Por sí solo no es grave.'
+    action: Ninguna, salvo que se combine con otras señales.
+
+  - id: H-04
+    name: Ejecución desde carpeta de usuario
+    weight: 15
+    severity: Baja
+    attack: [T1204]
+    category: location
+    phase: v1
+    template: '"{nombre}" se ejecuta desde {carpeta}, un lugar donde los programas legítimos rara vez se instalan.'
+    action: ''
+
+  - id: H-05
+    name: Suplantación de proceso del sistema
+    weight: 50
+    severity: Alta
+    attack: [T1036.005]
+    category: masquerading
+    phase: v1
+    template: '"{nombre}" usa el nombre de un proceso de Windows pero no está donde Windows guarda sus archivos. Es una técnica típica para pasar desapercibido.'
+    action: Revisá el detalle; es una señal fuerte de infección.
+    params:
+      # nombre → carpetas oficiales (relativas a %windir%)
+      system_processes:
+        svchost.exe: [System32, SysWOW64]
+        lsass.exe: [System32]
+        csrss.exe: [System32]
+        winlogon.exe: [System32]
+        services.exe: [System32]
+        smss.exe: [System32]
+        wininit.exe: [System32]
+        explorer.exe: ['', SysWOW64]
+        taskhostw.exe: [System32]
+        spoolsv.exe: [System32]
+        dwm.exe: [System32]
+        lsm.exe: [System32]
+        conhost.exe: [System32]
+        rundll32.exe: [System32, SysWOW64]
+        dllhost.exe: [System32, SysWOW64]
+        ctfmon.exe: [System32, SysWOW64]
+        sihost.exe: [System32]
+        RuntimeBroker.exe: [System32]
+        WmiPrvSE.exe: [System32\wbem, SysWOW64\wbem]
+        audiodg.exe: [System32]
+        fontdrvhost.exe: [System32]
+        SearchIndexer.exe: [System32]
+        wuauclt.exe: [System32]
+        cmd.exe: [System32, SysWOW64]
+        powershell.exe: [System32\WindowsPowerShell\v1.0, SysWOW64\WindowsPowerShell\v1.0]
+      # nombres que imitan procesos del sistema (typosquatting)
+      typosquats: [scvhost.exe, svch0st.exe, svhost.exe, svchosts.exe, svchots.exe, svcchost.exe, scvhosts.exe,
+                   lsasss.exe, lsas.exe, lsass32.exe, isass.exe, lssas.exe, csrrs.exe, csrsss.exe, crss.exe,
+                   expl0rer.exe, explorer32.exe, iexplorer.exe, explore.exe, winlogin.exe, winlog0n.exe,
+                   service.exe, servlces.exe, smms.exe, taskhost32.exe, taskhosts.exe, rundl32.exe, rundll.exe,
+                   dllhst.exe, ctfmom.exe, spoolsvc.exe, wininit32.exe, runtimebrocker.exe]
+
+  - id: H-06
+    name: Parent-child anómalo
+    weight: 40
+    severity: Alta
+    attack: [T1059]
+    category: process_tree
+    phase: v1
+    template: 'Un documento o programa ({padre}) abrió una consola de comandos ({hijo}), algo que normalmente no hace.'
+    action: Revisá qué documento se abrió recientemente.
+    params:
+      parents: [winword.exe, excel.exe, powerpnt.exe, outlook.exe, msaccess.exe, mspub.exe, onenote.exe, visio.exe,
+                acrord32.exe, acrobat.exe, foxitpdfreader.exe, foxitreader.exe, sumatrapdf.exe, wordpad.exe,
+                chrome.exe, msedge.exe, firefox.exe, brave.exe, opera.exe, iexplore.exe, vivaldi.exe,
+                hwp.exe, eqnedt32.exe, mshta.exe]
+      children: [powershell.exe, pwsh.exe, cmd.exe, wscript.exe, cscript.exe, mshta.exe, rundll32.exe, regsvr32.exe,
+                 certutil.exe, bitsadmin.exe, msbuild.exe, installutil.exe, schtasks.exe, wmic.exe, curl.exe, bash.exe]
+      # Excepciones legítimas padre→hijo (p.ej. el navegador lanza su propio updater con cmd).
+      allowed_pairs: ['chrome.exe>cmd.exe?--type=', 'msedge.exe>cmd.exe?--type=']
+
+  - id: H-07
+    name: LOLBin con argumentos sospechosos
+    weight: 35
+    severity: Media
+    attack: [T1218]
+    category: lolbin
+    phase: v1
+    template: 'Una herramienta de Windows ({nombre}) se usó de una forma que suelen aprovechar los atacantes para descargar o ejecutar código.'
+    action: ''
+    params:
+      # binario → expresiones regulares sobre la línea de comandos (case-insensitive)
+      patterns:
+        powershell.exe: ['\s-e(nc|ncodedcommand)?\s+[A-Za-z0-9+/=]{20,}', '-w(indowstyle)?\s+h(idden)?', '\biex\b', 'invoke-expression',
+                         'downloadstring', 'downloadfile', 'net\.webclient', 'frombase64string', '-nop\b.*-w\s+h', 'bypass.*-e', 'invoke-webrequest.*\|\s*iex', 'start-bitstransfer', 'add-mppreference']
+        pwsh.exe: ['\s-e(nc|ncodedcommand)?\s+[A-Za-z0-9+/=]{20,}', '\biex\b', 'downloadstring', 'frombase64string']
+        mshta.exe: ['https?://', 'javascript:', 'vbscript:', '\.hta\b']
+        certutil.exe: ['-urlcache', '-decode', '-decodehex', 'verifyctl.*http']
+        bitsadmin.exe: ['/transfer', '/addfile', '/setnotifycmdline']
+        rundll32.exe: ['javascript:', 'https?://', '\\appdata\\', '\\temp\\', '\\users\\public\\', '\\programdata\\[^\\]+\.(dll|dat|tmp|png|jpg)', ',#\d+', 'shell32\.dll,\s*shellexec_rundll', 'comsvcs\.dll.*minidump']
+        regsvr32.exe: ['/i:https?', 'scrobj\.dll', '/i:.*\.sct', '\\appdata\\', '\\temp\\']
+        wscript.exe: ['\\appdata\\', '\\temp\\', '\\downloads\\', '\\users\\public\\', '//e:', '\.(js|jse|vbs|vbe|wsf)\b']
+        cscript.exe: ['\\appdata\\', '\\temp\\', '\\downloads\\', '\\users\\public\\', '//e:']
+        msiexec.exe: ['/q.*https?://', 'https?://.*/q']
+        wmic.exe: ['process\s+call\s+create', '/format:.*https?', 'shadowcopy\s+delete']
+        schtasks.exe: ['/create.*\\appdata\\', '/create.*\\temp\\', '/create.*powershell', '/create.*mshta', '/create.*/sc\s+minute']
+        cmd.exe: ['/c\s+.*(powershell|mshta|certutil|bitsadmin).*https?://', 'vssadmin.*delete\s+shadows', 'bcdedit.*recoveryenabled\s+no']
+        msbuild.exe: ['\\appdata\\', '\\temp\\', '\\users\\public\\']
+        installutil.exe: ['/u\b', '\\appdata\\', '\\temp\\']
+        curl.exe: ['-o\s+.*\\(appdata|temp|public)\\', '\|\s*(cmd|powershell)']
+        forfiles.exe: ['/c\s+.*(powershell|cmd)']
+        hh.exe: ['https?://']
+        odbcconf.exe: ['regsvr', '/a\s*\{']
+        vssadmin.exe: ['delete\s+shadows', 'resize\s+shadowstorage']
+        bcdedit.exe: ['recoveryenabled\s+no', 'bootstatuspolicy\s+ignoreallfailures']
+
+  - id: H-08
+    name: Persistencia de binario sospechoso
+    weight: 20
+    severity: Media
+    attack: [T1547, T1053, T1543]
+    category: persistence
+    phase: v1
+    template: '"{nombre}" se configuró para arrancar solo cada vez que encendés la PC.'
+    action: Si no lo reconocés, deshabilitá el arranque desde la app.
+    params:
+      # Calibración (PC limpia real, 2026-10-14): muchas apps legítimas firmadas se instalan en AppData/ProgramData
+      # y arrancan solas. Con false, H-08 sólo dispara si el binario NO tiene firma válida.
+      signed_user_folder_counts: false
+
+  - id: H-09
+    name: Persistencia WMI
+    weight: 60
+    severity: Alta
+    attack: [T1546.003]
+    category: persistence
+    phase: v1
+    template: 'Encontramos una tarea escondida en un componente de Windows (WMI) que ejecuta comandos automáticamente. En PCs hogareñas casi siempre es malicioso.'
+    action: Revisala y eliminala desde la app.
+    params:
+      # Consumers legítimos conocidos (allowlist por nombre).
+      allowed_consumers: [SCM Event Log Consumer, BVTConsumer, NTEventLogConsumer]
+
+  - id: H-10
+    name: Hijack de accesibilidad / IFEO
+    weight: 70
+    severity: Alta
+    attack: [T1546.008, T1546.012]
+    category: persistence
+    phase: v1
+    template: 'Alguien reemplazó una función de Windows ({objetivo}) para que se ejecute otra cosa en su lugar. Con las de accesibilidad se puede entrar a la PC sin contraseña.'
+    action: Probable intrusión. Restaurá la configuración y cambiá tus contraseñas.
+    params:
+      accessibility: [sethc.exe, utilman.exe, osk.exe, magnify.exe, narrator.exe, displayswitch.exe, atbroker.exe]
+      # Debuggers legítimos (herramientas de desarrollo o de Microsoft).
+      allowed_debuggers: ['vsjitdebugger.exe', 'windbg.exe', 'procexp.exe', 'procexp64.exe', 'werfault.exe', 'systemsettings.exe', 'sdbinst.exe']
+
+  - id: H-11
+    name: Exclusiones raras en Defender
+    weight: 45
+    severity: Alta
+    attack: [T1562.001]
+    category: defense_evasion
+    phase: v1
+    template: 'Alguien le dijo al antivirus que no revise {ruta}. Los programas maliciosos suelen hacer esto para esconderse.'
+    action: Si no lo configuraste vos, quitá la exclusión y escaneá.
+    params:
+      # Exclusiones de raíz completa: siempre sospechosas.
+      broad: ['C:\', 'C:\Users', 'C:\Windows', 'C:\ProgramData', '%USERPROFILE%', '%APPDATA%', '%TEMP%', '.exe', '.dll', '.ps1']
+
+  - id: H-12
+    name: Antivirus desactivado
+    weight: 30
+    severity: Media
+    attack: [T1562.001]
+    category: defense_evasion
+    phase: v1
+    template: 'La protección en tiempo real del antivirus está apagada.'
+    action: Reactivá la protección en tiempo real.
+
+  - id: H-13
+    name: Consumo sostenido anómalo (miner)
+    weight: 35
+    severity: Media
+    attack: [T1496]
+    category: resources
+    phase: v1
+    template: '"{nombre}" está usando mucho tu {recurso} de forma constante. Puede ser un minero: usa tu compu para ganar plata para otro.'
+    action: Revisá el programa; si no lo reconocés, finalizalo y analizalo.
+    params:
+      cpu_percent: 40
+      gpu_percent: 50
+      # Nombres típicos de mineros (suman aunque estén firmados).
+      miner_names: [xmrig.exe, xmr-stak.exe, nbminer.exe, t-rex.exe, phoenixminer.exe, lolminer.exe, gminer.exe, nanominer.exe, teamredminer.exe, ccminer.exe, cpuminer.exe, ethminer.exe]
+      miner_cmdline: ['stratum\+tcp://', 'stratum\+ssl://', '--donate-level', '-o\s+pool\.', 'pool\.(minexmr|supportxmr|hashvault|nanopool|2miners|f2pool)', '--coin\s', '-a\s+(rx/0|cn/r|ethash|kawpow)']
+
+  - id: H-14
+    name: Programa sin firma con conexión saliente
+    weight: 15
+    severity: Baja
+    attack: [T1071]
+    category: network
+    phase: v1
+    template: '"{nombre}" no tiene firma y se está conectando a internet ({destino}).'
+    action: ''
+
+  - id: H-15
+    name: Hosts / DNS / proxy alterados
+    weight: 50
+    severity: Alta
+    attack: [T1565, T1557]
+    category: network_config
+    phase: v1
+    template: 'La configuración de internet de tu PC fue modificada para desviar algunas páginas a otro lugar ({detalle}).'
+    action: Restaurá la configuración desde la app.
+    params:
+      # Dominios cuya redirección en hosts es sospechosa (bancos, buscadores, AV, redes sociales).
+      sensitive_domains: [google., bing., yahoo., facebook., instagram., whatsapp., microsoft., windowsupdate., live.com, outlook.,
+                          paypal., mercadopago., mercadolibre., bancoprovincia., bbva., santander., galicia., macro., hsbc., icbc., nacion.,
+                          brubank., uala., naranjax., binance., coinbase., blockchain., amazon., apple., icloud., netflix., steam,
+                          avast., kaspersky., eset., malwarebytes., norton., mcafee., bitdefender., virustotal., sophos., trendmicro.,
+                          avg., symantec., defender., wdcp., update.microsoft]
+      # Resolvers públicos reconocidos (no generan hallazgo).
+      known_dns: [8.8.8.8, 8.8.4.4, 1.1.1.1, 1.0.0.1, 9.9.9.9, 149.112.112.112, 208.67.222.222, 208.67.220.220,
+                  94.140.14.14, 94.140.15.15, 76.76.2.0, 76.76.10.0, 185.228.168.9, 185.228.169.9, 2001:4860:4860::8888,
+                  2001:4860:4860::8844, 2606:4700:4700::1111, 2606:4700:4700::1001, 2620:fe::fe, 2620:fe::9]
+      # Proxies locales legítimos frecuentes (antivirus, VPNs, herramientas dev).
+      allowed_proxies: ['127.0.0.1:8888', 'localhost:8888']
+
+  - id: H-16
+    name: Certificado raíz agregado
+    weight: 40
+    severity: Alta
+    attack: [T1553.004]
+    category: certificates
+    phase: v1
+    template: 'Se instaló un certificado ("{nombre}") que permite a un tercero leer tus conexiones seguras (HTTPS).'
+    action: Si no lo instalaste vos (por ejemplo software corporativo o antivirus), eliminalo.
+
+  - id: H-17
+    name: Software de acceso remoto
+    weight: 0
+    severity: Pregunta
+    attack: [T1219]
+    category: remote_access
+    phase: v1
+    template: '{nombre} es un programa legítimo para controlar la PC a distancia. Si lo instalaste vos o tu soporte técnico, está bien. Si alguien te llamó pidiendo que lo instales, puede ser una estafa.'
+    action: Respondé la pregunta para que podamos evaluarlo.
+    question:
+      id: remote_tool_installed_by
+      text: '¿Instalaste vos {nombre}?'
+      options:
+        - { value: yes, label: 'Sí, yo (o mi soporte técnico)', weight: 0 }
+        - { value: phone, label: 'Me lo pidió alguien por teléfono', weight: 70 }
+        - { value: unknown, label: 'No sé', weight: 40 }
+
+  - id: H-18
+    name: Extensión de navegador riesgosa
+    weight: 30
+    severity: Media
+    attack: [T1176]
+    category: browser
+    phase: v1
+    template: 'La extensión "{nombre}" ({navegador}) puede ver todo lo que hacés en el navegador{motivo}.'
+    action: Quitá la extensión si no la reconocés.
+    params:
+      broad_permissions: ['<all_urls>', '*://*/*', 'http://*/*', 'https://*/*', webRequest, webRequestBlocking, cookies, declarativeNetRequestWithHostAccess, debugger, proxy, nativeMessaging, management]
+      # Una extensión del store sólo dispara si además tiene ≥ N permisos amplios y no está en la KB.
+      store_min_broad: 3
+
+  - id: H-19
+    name: Hijack de navegador
+    weight: 30
+    severity: Media
+    attack: [T1176]
+    category: browser
+    phase: v1
+    template: 'Alguien cambió tu {ajuste} de {navegador} a "{valor}" sin que te des cuenta.'
+    action: Restaurá los valores.
+    params:
+      standard_search: [google., bing.com, duckduckgo.com, yahoo.com, ecosia.org, startpage.com, search.brave.com, qwant.com, yandex., baidu.com, ask.com, perplexity.ai, chatgpt.com, wikipedia.org, kagi.com]
+      standard_home: [google., bing.com, msn.com, microsoft.com, duckduckgo.com, yahoo.com, outlook., gmail., about:, chrome://, edge://, brave://, opera:, vivaldi:]
+
+  - id: H-20
+    name: Spam de notificaciones push
+    weight: 10
+    severity: Baja
+    attack: []
+    category: browser
+    phase: v1
+    template: 'Algunos sitios ({sitios}) tienen permiso para mostrarte notificaciones; suelen ser publicidad engañosa.'
+    action: Quitá esos permisos desde la app.
+    params:
+      # Sitios conocidos que legítimamente usan notificaciones.
+      allowed: [web.whatsapp.com, mail.google.com, calendar.google.com, outlook.live.com, outlook.office.com, teams.microsoft.com,
+                discord.com, web.telegram.org, facebook.com, messenger.com, twitter.com, x.com, linkedin.com, slack.com, youtube.com,
+                instagram.com, reddit.com, github.com, meet.google.com, chat.google.com, trello.com, notion.so]
+      min_unknown: 1
+
+  - id: H-21
+    name: Doble extensión / descarga reciente sospechosa
+    weight: 40
+    severity: Alta
+    attack: [T1036.007, T1204.002]
+    category: files
+    phase: v1
+    template: '"{nombre}" {motivo}.'
+    action: No lo abras; eliminalo.
+
+  - id: H-22
+    name: Cuenta local nueva con privilegios
+    weight: 40
+    severity: Alta
+    attack: [T1136.001]
+    category: accounts
+    phase: v1
+    template: 'Hay una cuenta de administrador ("{nombre}") en tu PC que no parece haber estado antes.'
+    action: Si no la reconocés, deshabilitala.
+    params:
+      recent_days: 30
+    question:
+      id: admin_account_known
+      text: '¿Reconocés la cuenta de administrador "{nombre}"?'
+      options:
+        - { value: yes, label: 'Sí, la creé yo o alguien de confianza', weight: 0 }
+        - { value: no, label: 'No la reconozco', weight: 70 }
+        - { value: unknown, label: 'No sé', weight: 40 }
+
+  - id: H-23
+    name: Proceso efímero sospechoso
+    # Requiere telemetría en segundo plano (modo vivo con ETW), que se sacó: Demiurge no deja nada corriendo.
+    enabled: false
+    weight: 30
+    severity: Media
+    attack: [T1059]
+    category: process_tree
+    phase: v2
+    template: 'Un programa ("{nombre}") se ejecutó durante un instante ({duracion}) y desapareció, algo típico de instaladores de malware.'
+    action: ''
+    params:
+      max_seconds: 10
+
+  - id: H-24
+    name: DLL sin firma en proceso firmado
+    # Sin modo vivo no hay registro de DLLs cargadas; queda definida para cuando se agregue la enumeración de módulos.
+    enabled: false
+    weight: 35
+    severity: Media
+    attack: [T1574.002]
+    category: dll
+    phase: v2
+    template: 'Un programa legítimo ({proceso}) cargó un componente sin firma ("{nombre}") desde una carpeta inusual.'
+    action: ''
+
+  - id: H-25
+    name: Beaconing
+    weight: 35
+    severity: Media
+    attack: [T1071, T1573]
+    category: network
+    phase: v2
+    # Sin modo vivo se aproxima comparando escaneos cercanos: misma conexión de un programa sin firma en ambos.
+    template: '"{nombre}" sigue conectado a {destino}: lo vimos en dos escaneos separados por {intervalo}, como si reportara a alguien.'
+    action: Si no reconocés el programa, desconectá internet y revisalo.
+    params:
+      min_gap_minutes: 15
+      max_gap_hours: 48
+
+  - id: H-26
+    name: Match YARA
+    weight: 60
+    severity: Alta
+    attack: []
+    category: yara
+    phase: v2
+    template: '"{nombre}" coincide con una firma de malware conocida: {familia} (regla {regla}).'
+    action: No lo abras. Movelo a cuarentena desde acá y, si estaba arrancando solo, deshabilitá su arranque.
+    params:
+      # Reglas de YARA Forge con "score" < 70 son menos certeras: pesan menos.
+      min_confident_score: 70
+      low_confidence_weight: 35
+      # Reglas pensadas para malware desempaquetado en memoria: sobre archivos dan falsos positivos
+      # (calibración 14/10/2026: CAPE_Bumblebee marcaba Spotify.dll, firmado y limpio según Defender).
+      low_confidence_prefixes: [CAPE_]
+      contradicted_weight: 25         # Defender analizó el archivo y no encontró nada
+      contradicted_signed_weight: 10  # ...y además tiene firma digital válida
+
+  - id: H-27
+    name: Anomalía en memoria
+    weight: 60
+    severity: Alta
+    attack: [T1055]
+    category: memory
+    phase: v2
+    template: 'Algo se metió dentro de "{nombre}", un programa legítimo, para esconderse ({detalle}).'
+    action: Seguí los pasos de limpieza.
+
+  - id: H-28
+    name: Driver vulnerable o sin firma
+    weight: 50
+    severity: Alta
+    attack: [T1068, T1562]
+    category: drivers
+    phase: v2
+    template: 'Hay un controlador instalado ("{nombre}") que puede usarse para apagar el antivirus{motivo}.'
+    action: Revisá su origen; actualizalo o eliminalo.
+
+  - id: H-29
+    name: Borrado de logs
+    weight: 50
+    severity: Alta
+    attack: [T1070.001]
+    category: defense_evasion
+    phase: v2
+    template: 'Alguien borró el registro de actividad de Windows ({log}) el {fecha}.'
+    action: ''
+
+  - id: H-30
+    name: Servicio instalado recientemente
+    weight: 30
+    severity: Media
+    attack: [T1543.003]
+    category: persistence
+    phase: v2
+    template: 'Se instaló un servicio nuevo ("{nombre}") que corre en segundo plano, el {fecha}.'
+    action: ''
+
+  - id: H-31
+    name: Regla Sigma (Hayabusa)
+    weight: 40
+    severity: Alta
+    attack: []
+    category: sigma
+    phase: v3
+    template: 'Windows registró actividad que coincide con "{regla}".'
+    action: ''
+
+  - id: H-32
+    name: Microsoft Defender confirma malware
+    weight: 100
+    severity: Critica
+    attack: []
+    category: defender
+    phase: v2
+    template: 'Microsoft Defender analizó "{nombre}" a pedido nuestro y confirma que es malware: {familia}.'
+    action: Desconectá la PC de internet. Movelo a cuarentena desde acá o dejá que Defender lo elimine (Seguridad de Windows → Protección contra virus y amenazas). Después cambiá tus contraseñas desde otro dispositivo.
+
+  - id: H-33
+    name: Amenaza detectada por Defender que sigue en la PC
+    weight: 60
+    severity: Alta
+    attack: []
+    category: defender
+    phase: v2
+    template: 'Microsoft Defender detectó {familia} en "{nombre}" el {fecha}, y el archivo sigue en tu PC.'
+    action: Abrí Seguridad de Windows → Protección contra virus y amenazas → Historial de protección, y eliminá la amenaza. Si no podés, movelo a cuarentena desde acá.
+    params:
+      days: 30
