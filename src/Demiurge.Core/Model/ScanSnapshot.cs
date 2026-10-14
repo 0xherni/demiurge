@@ -25,6 +25,8 @@ public sealed class ScanSnapshot
     public List<EventInfo> Events { get; set; } = new();
     public List<RecentFile> RecentFiles { get; set; } = new();
     public List<DriverInfo> Drivers { get; set; } = new();
+    public List<ExecutionRecord> Executions { get; set; } = new();
+    public List<FirewallRule> FirewallRules { get; set; } = new();
     public DefenderStatus Defender { get; set; } = new();
     public List<string> HostsEntries { get; set; } = new();
 
@@ -64,6 +66,8 @@ public sealed class ScanSnapshot
         foreach (var x in Events) yield return x;
         foreach (var x in RecentFiles) yield return x;
         foreach (var x in Drivers) yield return x;
+        foreach (var x in Executions) yield return x;
+        foreach (var x in FirewallRules) yield return x;
     }
 
     public BinaryInfo? GetBinary(string? key) =>

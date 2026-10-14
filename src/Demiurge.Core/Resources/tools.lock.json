@@ -22,6 +22,19 @@
       "exeSha256": "56a58a8bbf2cec9a5c7c68129e8863af6181fb51dfc25226f1a756aba66b4707",
       "license": "BSD-2-Clause",
       "licenseUrl": "https://raw.githubusercontent.com/hasherezade/hollows_hunter/v0.4.1.1/LICENSE"
+    },
+    "hayabusa": {
+      "name": "Hayabusa (live-response)",
+      "version": "4.2.0",
+      "url": "https://github.com/Yamato-Security/hayabusa/releases/download/v4.2.0/hayabusa-4.2.0-win-x64-live-response.zip",
+      "zipSha256": "77a596960e51c5a53e56e7f6c6eaae619932253dffcbd5d40d790155c828c459",
+      "dir": "hayabusa",
+      "exe": "hayabusa-4.2.0-win-x64.exe",
+      "exeSha256": "9f3f47ce0a0cd0289fa812f04f4009ca4147b6982797f9ddf22bef923f248642",
+      "copyAll": true,
+      "license": "AGPL-3.0",
+      "licenseUrl": "https://raw.githubusercontent.com/Yamato-Security/hayabusa/v4.2.0/LICENSE.txt",
+      "sourceUrl": "https://github.com/Yamato-Security/hayabusa/archive/refs/tags/v4.2.0.zip"
     }
   }
 }

@@ -351,3 +351,54 @@ public sealed class DefenderDetection
     public List<string> Resources { get; set; } = new();
     public string? Action { get; set; }
 }
+
+/// <summary>
+/// COL-27: algo que se ejecutó en la PC, según los rastros que deja Windows (BAM, UserAssist, PCA, Prefetch).
+/// Sirve para ver programas que corrieron aunque ya se hayan borrado (típico de stealers y droppers).
+/// </summary>
+public sealed class ExecutionRecord : IEntity
+{
+    /// <summary>Ruta completa si la fuente la da (BAM, UserAssist, PCA); null si sólo se conoce el nombre (Prefetch).</summary>
+    public string? Path { get; set; }
+    public string Name { get; set; } = "";
+    public List<string> Sources { get; set; } = new();
+    public DateTimeOffset? LastRun { get; set; }
+    public DateTimeOffset? FirstRun { get; set; }
+    public int? RunCount { get; set; }
+    public string? User { get; set; }
+    /// <summary>Si el archivo sigue en el disco.</summary>
+    public bool? Exists { get; set; }
+    public string? BinaryKey { get; set; }
+
+    public EntityKind Kind => EntityKind.Execution;
+    public string Key => "exec:" + (Path ?? Name).ToLowerInvariant();
+    public string DisplayName => Name;
+}
+
+/// <summary>COL-28: regla del Firewall de Windows.</summary>
+public sealed class FirewallRule : IEntity
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    /// <summary>Allow | Block</summary>
+    public string Action { get; set; } = "";
+    /// <summary>In | Out</summary>
+    public string Direction { get; set; } = "";
+    public bool Active { get; set; }
+    public string? App { get; set; }
+    public string? Service { get; set; }
+    public string? Protocol { get; set; }
+    public string? LocalPorts { get; set; }
+    public string? RemoteAddresses { get; set; }
+    public string? Profiles { get; set; }
+    public string? Group { get; set; }
+    /// <summary>Regla que trae Windows (nombre o grupo con referencia a recurso "@...").</summary>
+    public bool BuiltIn { get; set; }
+    /// <summary>local | policy</summary>
+    public string Store { get; set; } = "local";
+    public string? BinaryKey { get; set; }
+
+    public EntityKind Kind => EntityKind.FirewallRule;
+    public string Key => $"fw:{Store}|{Id}".ToLowerInvariant();
+    public string DisplayName => Name;
+}

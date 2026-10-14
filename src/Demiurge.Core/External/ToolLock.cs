@@ -17,6 +17,10 @@ public static class ToolLock
         public string ExeSha256 { get; set; } = "";
         public string License { get; set; } = "";
         public string LicenseUrl { get; set; } = "";
+        /// <summary>Copiar todo el contenido del zip (Hayabusa necesita sus reglas embebidas junto al exe).</summary>
+        public bool CopyAll { get; set; }
+        /// <summary>Código fuente de la versión exacta (las licencias GPL/AGPL exigen ofrecerlo).</summary>
+        public string? SourceUrl { get; set; }
     }
 
     private sealed class LockFile

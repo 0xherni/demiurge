@@ -47,6 +47,10 @@ public static class Heuristics
             ["H-31"] = H31_Sigma,
             ["H-32"] = H32_DefenderConfirms,
             ["H-33"] = H33_DefenderHistory,
+            ["H-34"] = H34_SelfDeletedExecution,
+            ["H-35"] = H35_RemoteLogon,
+            ["H-36"] = H36_PasswordGuessing,
+            ["H-37"] = H37_FirewallAllowsSuspicious,
         };
 
     /// <summary>Binarios "activos": los que se ejecutan, arrancan solos o están cargados (no sólo descargados).</summary>
@@ -57,6 +61,8 @@ public static class Heuristics
         foreach (var p in ctx.Snapshot.Persistence) if (p.BinaryKey is not null) set.Add(p.BinaryKey);
         foreach (var m in ctx.Snapshot.ModuleLoads) if (m.BinaryKey is not null) set.Add(m.BinaryKey);
         foreach (var d in ctx.Snapshot.Drivers) if (d.BinaryKey is not null) set.Add(d.BinaryKey);
+        foreach (var x in ctx.Snapshot.Executions) if (x.BinaryKey is not null) set.Add(x.BinaryKey);
+        foreach (var r in ctx.Snapshot.FirewallRules) if (r.BinaryKey is not null) set.Add(r.BinaryKey);
         return set;
     }
 
@@ -166,6 +172,7 @@ public static class Heuristics
 
         foreach (var p in ctx.Snapshot.Processes) Check(p.Path, p, p.BinaryKey);
         foreach (var p in ctx.Snapshot.Persistence) Check(p.ResolvedPath, p, p.BinaryKey);
+        foreach (var x in ctx.Snapshot.Executions.Where(x => x.Path is not null)) Check(x.Path, x, x.BinaryKey);
     }
 
     // ---------------------------------------------------------------- H-06
@@ -588,6 +595,13 @@ public static class Heuristics
             ctx.Emit(def, f, f.BinaryKey ?? f.Key, new() { ["nombre"] = f.DisplayName, ["motivo"] = motivo },
                 Raw(("path", f.Path), ("hostUrl", f.HostUrl), ("referrer", f.ReferrerUrl), ("zone", f.ZoneId), ("feed", hit?.Source)));
         }
+        // Un "documento" con doble extensión que además se ejecutó es todavía más grave.
+        foreach (var x in ctx.Snapshot.Executions.Where(x => PathClassifier.HasDoubleExtension(x.Name)))
+        {
+            ctx.Emit(def, x, x.BinaryKey ?? x.Key,
+                new() { ["nombre"] = x.Name, ["motivo"] = $"parece un documento pero es un programa, y se ejecutó{(x.LastRun is null ? "" : $" el {x.LastRun.Value.ToLocalTime():dd/MM/yyyy HH:mm}")}" },
+                Raw(("path", x.Path), ("sources", x.Sources), ("lastRun", x.LastRun?.ToString("O"))));
+        }
     }
 
     // ---------------------------------------------------------------- H-22
@@ -760,7 +774,9 @@ public static class Heuristics
         }
     }
     private static void H27_Memory(RuleContext ctx, HeuristicDefinition def) => EmitExternal(ctx, def, "EXT-02");
-    private static void H31_Sigma(RuleContext ctx, HeuristicDefinition def) => EmitExternal(ctx, def, "EXT-03");
+    /// <summary>Hayabusa: las reglas de nivel crítico pesan más que las de nivel alto.</summary>
+    private static void H31_Sigma(RuleContext ctx, HeuristicDefinition def) =>
+        EmitExternal(ctx, def, "EXT-03", d => d.Level == "critical" ? def.Int("critical_weight", 50) : null);
 
     private static void EmitExternal(RuleContext ctx, HeuristicDefinition def, string tool, Func<ExternalDetection, int?>? weight = null, Func<ExternalDetection, string?>? note = null)
     {
@@ -781,7 +797,13 @@ public static class Heuristics
                 scoring = $"{tool}:{d.Rule}".ToLowerInvariant();
             }
             var f = ctx.Emit(def, entity, scoring,
-                new() { ["nombre"] = proc?.Name ?? bin?.DisplayName ?? Path.GetFileName(d.TargetPath ?? "") , ["familia"] = d.Family ?? d.Rule, ["regla"] = d.Rule, ["detalle"] = d.Data.GetValueOrDefault("detail") ?? d.Rule },
+                new()
+                {
+                    ["nombre"] = proc?.Name ?? bin?.DisplayName ?? Path.GetFileName(d.TargetPath ?? ""), ["familia"] = d.Family ?? d.Rule, ["regla"] = d.Rule,
+                    ["detalle"] = d.Data.GetValueOrDefault("detail") ?? d.Rule,
+                    ["conteo"] = d.Data.GetValueOrDefault("count") is { } c ? (c == "1" ? "1 vez" : $"{c} veces") : "",
+                    ["fecha"] = DateTimeOffset.TryParse(d.Data.GetValueOrDefault("last"), out var last) ? last.ToLocalTime().ToString("dd/MM/yyyy HH:mm") : "",
+                },
                 Raw(("tool", tool), ("rule", d.Rule), ("family", d.Family), ("level", d.Level), ("target", d.TargetPath), ("pid", d.Pid),
                     ("author", d.Data.GetValueOrDefault("author")), ("reference", d.Data.GetValueOrDefault("reference"))),
                 weight?.Invoke(d));
@@ -839,6 +861,109 @@ public static class Heuristics
             if (!userFolder && !unsigned && !scripted) continue;
             ctx.Emit(def, e, b?.Key ?? $"service:{name}".ToLowerInvariant(), new() { ["nombre"] = name, ["fecha"] = e.Timestamp.ToString("dd/MM/yyyy HH:mm") },
                 Raw(("service", name), ("imagePath", image), ("account", e.Data.GetValueOrDefault("AccountName")), ("userFolder", userFolder), ("unsigned", unsigned), ("scripted", scripted)));
+        }
+    }
+
+    // ---------------------------------------------------------------- H-34
+    /// <summary>
+    /// Se ejecutó desde una carpeta de usuario y ya no existe: así se comportan los droppers y los ladrones de
+    /// contraseñas que se borran solos. Los instaladores también se borran después de correr, así que los nombres
+    /// típicos de instalador pesan mucho menos.
+    /// </summary>
+    private static void H34_SelfDeletedExecution(RuleContext ctx, HeuristicDefinition def)
+    {
+        int days = def.Int("days", 14);
+        var installer = def.List("installer_patterns").Select(p => new Regex(p, RegexOptions.IgnoreCase)).ToList();
+        var since = DateTimeOffset.Now.AddDays(-days);
+        foreach (var x in ctx.Snapshot.Executions)
+        {
+            if (x.Path is null || x.Exists != false || x.LastRun is null || x.LastRun < since) continue;
+            var folder = PathClassifier.UserWritableFolder(x.Path);
+            if (folder is null) continue;
+            bool looksInstaller = installer.Any(r => r.IsMatch(x.Path));
+            ctx.Emit(def, x, x.Key,
+                new() { ["nombre"] = x.Name, ["carpeta"] = folder, ["fecha"] = x.LastRun.Value.ToLocalTime().ToString("dd/MM/yyyy HH:mm") },
+                Raw(("path", x.Path), ("lastRun", x.LastRun?.ToString("O")), ("sources", x.Sources), ("installerLike", looksInstaller)),
+                looksInstaller ? def.Int("installer_weight", 10) : null);
+        }
+    }
+
+    // ---------------------------------------------------------------- H-35
+    /// <summary>Inicio de sesión por Escritorio remoto: sólo el usuario sabe si fue él. Se pregunta.</summary>
+    private static void H35_RemoteLogon(RuleContext ctx, HeuristicDefinition def)
+    {
+        var logons = ctx.Snapshot.Events.Where(e => e.EventId == 4624 && e.Data.GetValueOrDefault("LogonType") == "10");
+        foreach (var g in logons.GroupBy(e => (user: e.Data.GetValueOrDefault("TargetUserName") ?? "?", ip: e.Data.GetValueOrDefault("IpAddress") ?? "-")))
+        {
+            var last = g.MaxBy(e => e.Timestamp)!;
+            var key = $"logon:rdp:{g.Key.user}|{g.Key.ip}".ToLowerInvariant();
+            int weight = def.Weight;
+            string? answer = null;
+            if (def.Question is not null && ctx.Answers.TryGetValue($"{key}|{def.Question.Id}", out var a))
+            {
+                answer = a.Answer;
+                weight = def.Question.Options.FirstOrDefault(o => o.Value == a.Answer)?.Weight ?? weight;
+            }
+            var f = ctx.Emit(def, last, key,
+                new()
+                {
+                    ["usuario"] = g.Key.user, ["ip"] = g.Key.ip is "-" or "" ? "una dirección desconocida" : g.Key.ip,
+                    ["fecha"] = last.Timestamp.ToLocalTime().ToString("dd/MM/yyyy HH:mm"), ["veces"] = g.Count() == 1 ? "1 vez" : $"{g.Count()} veces",
+                },
+                Raw(("user", g.Key.user), ("ip", g.Key.ip), ("count", g.Count()), ("last", last.Timestamp.ToString("O")), ("answer", answer)), weight);
+            if (answer is not null) f.Question = null;
+        }
+    }
+
+    // ---------------------------------------------------------------- H-36
+    /// <summary>Muchos intentos de contraseña fallidos: desde la red (alguien probando contraseñas a distancia) o en la propia PC.</summary>
+    private static void H36_PasswordGuessing(RuleContext ctx, HeuristicDefinition def)
+    {
+        int remoteMin = def.Int("remote_min_failures", 10);
+        int localMin = def.Int("local_min_failures", 30);
+        var failures = ctx.Snapshot.Events.Where(e => e.EventId == 4625).ToList();
+        if (failures.Count == 0) return;
+
+        static bool IsRemote(string? ip) => !string.IsNullOrEmpty(ip) && ip != "-" && ip != "127.0.0.1" && ip != "::1";
+        foreach (var g in failures.GroupBy(e => IsRemote(e.Data.GetValueOrDefault("IpAddress")) ? e.Data["IpAddress"] : "local"))
+        {
+            bool remote = g.Key != "local";
+            // Peor ventana de 24 h.
+            var times = g.Select(e => e.Timestamp).OrderBy(t => t).ToList();
+            int worst = 0;
+            for (int i = 0, j = 0; i < times.Count; i++)
+            {
+                while (times[i] - times[j] > TimeSpan.FromHours(24)) j++;
+                worst = Math.Max(worst, i - j + 1);
+            }
+            if (worst < (remote ? remoteMin : localMin)) continue;
+            var accounts = g.Select(e => e.Data.GetValueOrDefault("TargetUserName")).Where(a => !string.IsNullOrEmpty(a)).Distinct().Take(5).ToList();
+            var last = g.MaxBy(e => e.Timestamp)!;
+            ctx.Emit(def, last, $"logon:failures:{g.Key}".ToLowerInvariant(),
+                new()
+                {
+                    ["cantidad"] = worst.ToString(), ["origen"] = remote ? $"desde {g.Key}" : "en esta misma PC",
+                    ["cuentas"] = accounts.Count == 0 ? "?" : string.Join(", ", accounts),
+                },
+                Raw(("source", g.Key), ("worst24h", worst), ("total", g.Count()), ("accounts", accounts), ("last", last.Timestamp.ToString("O"))),
+                remote ? null : def.Int("local_weight", 20));
+        }
+    }
+
+    // ---------------------------------------------------------------- H-37
+    /// <summary>Regla del firewall (que no es de Windows) que deja entrar conexiones a un programa sin firma o en una carpeta de usuario.</summary>
+    private static void H37_FirewallAllowsSuspicious(RuleContext ctx, HeuristicDefinition def)
+    {
+        foreach (var r in ctx.Snapshot.FirewallRules.Where(r => r.Active && r.Action == "Allow" && r.Direction == "In" && !r.BuiltIn))
+        {
+            var b = ctx.Snapshot.GetBinary(r.BinaryKey);
+            if (b is null || ctx.IsHardAllowlisted(b)) continue;
+            bool unsigned = ctx.IsUnsigned(b);
+            var folder = PathClassifier.UserWritableFolder(b.Path);
+            if (!unsigned && folder is null) continue;
+            ctx.Emit(def, r, b.Key,
+                new() { ["nombre"] = b.DisplayName, ["regla"] = r.Name, ["puertos"] = r.LocalPorts ?? "cualquier puerto" },
+                Raw(("rule", r.Name), ("app", r.App), ("ports", r.LocalPorts), ("protocol", r.Protocol), ("profiles", r.Profiles), ("store", r.Store), ("unsigned", unsigned), ("folder", folder)));
         }
     }
 }

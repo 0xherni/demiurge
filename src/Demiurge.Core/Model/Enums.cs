@@ -57,6 +57,8 @@ public enum EntityKind
     Event,
     RecentFile,
     Driver,
+    Execution,
+    FirewallRule,
 }
 
 public enum PersistenceType

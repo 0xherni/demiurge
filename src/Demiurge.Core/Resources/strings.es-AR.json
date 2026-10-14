@@ -36,6 +36,9 @@
   "serious.memory": "Es una técnica avanzada para esconderse dentro de un programa legítimo.",
   "serious.yara": "Coincide con patrones de malware conocidos.",
   "serious.defender": "El motor de Microsoft Defender lo identificó como malware.",
+  "serious.execution": "Los rastros de ejecución muestran lo que pasó en la PC aunque el programa ya no esté.",
+  "serious.logon": "Tiene que ver con quién puede entrar a tu PC.",
+  "serious.firewall": "Abre la PC a conexiones desde afuera.",
   "serious.drivers": "Un controlador así funciona con los máximos privilegios y puede apagar la protección.",
   "serious.sigma": "Windows registró actividad que coincide con técnicas de ataque conocidas.",
   "serious.signature": "Por sí solo no es grave: muchos programas chicos o viejos no están firmados.",
@@ -57,6 +60,8 @@
   "subject.Event": "El registro de actividad de Windows",
   "subject.RecentFile": "Un archivo descargado",
   "subject.Driver": "Un controlador",
+  "subject.Execution": "Un programa que se ejecutó",
+  "subject.FirewallRule": "Una regla del firewall",
 
   "found.malicious": "es un malware conocido",
   "found.unknown": "desconocido",

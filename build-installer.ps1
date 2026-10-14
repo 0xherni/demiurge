@@ -45,12 +45,15 @@ foreach ($prop in $lock.tools.PSObject.Properties) {
     if (-not $exe) { throw "No se encontró $($t.exe) dentro del zip de $($t.name)." }
     $exeHash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
     if ($exeHash -ne $t.exeSha256) { throw "El hash de $($t.exe) no coincide ($exeHash). No se arma el instalador." }
-    Copy-Item $exe.FullName $dest
+    if ($t.copyAll) { Copy-Item (Join-Path $exe.DirectoryName "*") $dest -Recurse -Force }
+    else { Copy-Item $exe.FullName $dest }
     Remove-Item -Recurse -Force $tmp
 
     $licenseFile = Join-Path $dest "LICENSE.txt"
     Invoke-WebRequest $t.licenseUrl -OutFile $licenseFile -UseBasicParsing
-    $notices += "- $($t.name) $($t.version) ($($t.license)): tools\$($t.dir)\LICENSE.txt"
+    $line = "- $($t.name) $($t.version) ($($t.license)): tools\$($t.dir)\LICENSE.txt"
+    if ($t.sourceUrl) { $line += ". Código fuente de esta versión: $($t.sourceUrl)" }
+    $notices += $line
 }
 $notices += "", "Reglas YARA: se descargan en la PC del usuario desde YARA Forge (https://github.com/YARAHQ/yara-forge); cada regla conserva su autor y licencia en sus metadatos."
 $notices | Set-Content -Encoding utf8 (Join-Path $publish "THIRD-PARTY-NOTICES.txt")

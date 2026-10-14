@@ -229,7 +229,11 @@ public sealed class HollowsHunterScanner
     }
 }
 
-/// <summary>EXT-03 (v3): Hayabusa (reglas Sigma sobre EVTX). GPL: se invoca como ejecutable aparte.</summary>
+/// <summary>
+/// EXT-03: Hayabusa (miles de reglas Sigma sobre todos los registros de eventos). Se usa la edición "live-response",
+/// que trae las reglas codificadas junto al ejecutable (encoded_rules.yml): no hay miles de archivos de reglas que el
+/// antivirus pueda confundir con malware. AGPL: se invoca como programa aparte, nunca se linkea.
+/// </summary>
 public sealed class HayabusaScanner
 {
     private readonly ExternalRunner _runner;
@@ -243,16 +247,24 @@ public sealed class HayabusaScanner
         _logger = logger;
     }
 
-    public async Task<List<ExternalDetection>> ScanAsync(CancellationToken ct)
+    /// <param name="days">Ventana hacia atrás (escaneo normal: 7 días; profundo: 30).</param>
+    public async Task<List<ExternalDetection>> ScanAsync(int days, CancellationToken ct)
     {
         var exe = _runner.Verify(_options.Hayabusa, out var error);
         if (exe is null) { _logger.LogInformation("Hayabusa no se ejecuta: {Error}", error); return new(); }
-        var output = Path.Combine(Path.GetTempPath(), $"demiurge_hayabusa_{Guid.NewGuid():N}.jsonl");
+        if (!ProcessNative.IsAdministrator()) { _logger.LogInformation("Hayabusa necesita permisos de administrador para leer los registros"); return new(); }
+        // Salida en nuestra carpeta protegida.
+        var output = Path.Combine(DemiurgePaths.Ensure(Path.Combine(DemiurgePaths.Root, "tmp")), $"hayabusa_{Guid.NewGuid():N}.jsonl");
         try
         {
-            var args = new List<string> { "json-timeline", "-l", "-L", "-o", output, "-m", "high", "--no-wizard", "-q", "-w" };
-            await _runner.RunAsync(exe, args, TimeSpan.FromSeconds(_options.Hayabusa.TimeoutSeconds), ct).ConfigureAwait(false);
-            return File.Exists(output) ? Parse(await File.ReadAllLinesAsync(output, ct).ConfigureAwait(false)) : new();
+            // dfir-timeline (v4): -l análisis en vivo, sólo reglas de nivel alto o más, JSONL con perfil "verbose" (incluye MITRE),
+            // sin asistente (-w), sin banner (-q), sin color (-K), sin guardar logs de errores (-Q), fechas ISO (-O).
+            var args = new List<string> { "dfir-timeline", "-l", "--time-offset", $"{days}d", "-m", "high", "-t", "jsonl", "-p", "verbose",
+                "-o", output, "-w", "-q", "-K", "-C", "-Q", "-O" };
+            var r = await _runner.RunAsync(exe, args, TimeSpan.FromSeconds(_options.Hayabusa.TimeoutSeconds), ct).ConfigureAwait(false);
+            var dets = File.Exists(output) ? Parse(await File.ReadAllLinesAsync(output, ct).ConfigureAwait(false)) : new();
+            _logger.LogInformation("Hayabusa revisó los registros de eventos ({Days} días): {Rules} regla(s) con coincidencias (código {Code})", days, dets.Count, r.ExitCode);
+            return dets;
         }
         finally
         {
@@ -273,7 +285,7 @@ public sealed class HayabusaScanner
                 var r = doc.RootElement;
                 var title = r.TryGetProperty("RuleTitle", out var t) ? t.GetString() ?? "?" : "?";
                 var level = r.TryGetProperty("Level", out var l) ? l.GetString() ?? "" : "";
-                level = level switch { "crit" => "critical", "med" => "medium", "info" => "informational", _ => level };
+                level = level switch { "emer" or "emerg" or "emergency" => "critical", "crit" => "critical", "med" => "medium", "info" => "informational", _ => level };
                 if (!byRule.TryGetValue(title, out var det))
                 {
                     det = new ExternalDetection { Tool = "EXT-03", Rule = title, Level = level };
@@ -283,7 +295,9 @@ public sealed class HayabusaScanner
                     byRule[title] = det;
                 }
                 det.Data["count"] = (int.Parse(det.Data["count"]) + 1).ToString();
-                if (r.TryGetProperty("Timestamp", out var ts)) det.Data["last"] = ts.ToString();
+                if (r.TryGetProperty("Timestamp", out var ts) && string.CompareOrdinal(ts.ToString(), det.Data.GetValueOrDefault("last") ?? "") > 0) det.Data["last"] = ts.ToString();
+                if (r.TryGetProperty("Channel", out var ch)) det.Data["channel"] = ch.ToString();
+                if (r.TryGetProperty("EventID", out var eid)) det.Data["eventId"] = eid.ToString();
                 if (r.TryGetProperty("Details", out var d)) det.Data["detail"] = d.ToString().Length > 300 ? d.ToString()[..300] : d.ToString();
             }
             catch (JsonException)

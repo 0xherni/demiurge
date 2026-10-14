@@ -69,6 +69,8 @@ public sealed class ScanOrchestrator
         new EventLogCollector(),                // COL-23
         new DriverCollector(),                  // COL-24
         new RecentFilesCollector(),             // COL-25
+        new ExecutionHistoryCollector(),        // COL-27
+        new FirewallCollector(),                // COL-28
         new ResourceCollector(),                // COL-26
     ];
 
@@ -200,6 +202,7 @@ public sealed class ScanOrchestrator
             foreach (var p in s.Processes) if (p.BinaryKey is not null) interesting.Add(p.BinaryKey);
             foreach (var p in s.Persistence) if (p.BinaryKey is not null) interesting.Add(p.BinaryKey);
             foreach (var f in s.RecentFiles) if (f.BinaryKey is not null) interesting.Add(f.BinaryKey);
+            foreach (var x in s.Executions) if (x.BinaryKey is not null) interesting.Add(x.BinaryKey);
             interesting.UnionWith(suspiciousKeys);
             var targets = s.Binaries.Values
                 .Where(b => b.Exists && !(b.Signature?.IsMicrosoft == true) && (deep || (interesting.Contains(b.Key) && !Trusted(b))))
@@ -242,10 +245,10 @@ public sealed class ScanOrchestrator
             }
         }
 
-        if (_options.Hayabusa.Enabled && deep)
+        if (_options.Hayabusa.Enabled)
         {
-            progress?.Report(new ScanProgress("external", "Revisando el registro de eventos (Sigma)", 96));
-            var dets = await new HayabusaScanner(_runner, _options, _logger).ScanAsync(ct).ConfigureAwait(false);
+            progress?.Report(new ScanProgress("external", "Revisando los registros de eventos de Windows (Sigma)", 96));
+            var dets = await new HayabusaScanner(_runner, _options, _logger).ScanAsync(deep ? 30 : _options.EventLogDays, ct).ConfigureAwait(false);
             s.ExternalDetections.AddRange(dets);
             if (dets.Count > 0) Analyze(s);
         }

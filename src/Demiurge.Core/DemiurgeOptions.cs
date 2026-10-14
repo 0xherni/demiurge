@@ -27,6 +27,9 @@ public sealed class DemiurgeOptions
     /// <summary>COL-23: ventana de event logs.</summary>
     public int EventLogDays { get; set; } = 7;
 
+    /// <summary>COL-27: ventana del historial de ejecución.</summary>
+    public int ExecutionHistoryDays { get; set; } = 30;
+
     /// <summary>COL-26: ventana de medición de recursos (no reaccionar a picos).</summary>
     public int ResourceWindowSeconds { get; set; } = 20;
 
@@ -39,7 +42,7 @@ public sealed class DemiurgeOptions
     /// </summary>
     public ExternalToolOptions YaraX { get; set; } = new() { FileName = "yr.exe", Enabled = true };
     public ExternalToolOptions HollowsHunter { get; set; } = new() { FileName = "hollows_hunter.exe", Enabled = true };
-    public ExternalToolOptions Hayabusa { get; set; } = new() { FileName = "hayabusa.exe" };
+    public ExternalToolOptions Hayabusa { get; set; } = new() { FileName = "hayabusa.exe", Enabled = true };
 
     /// <summary>Pedirle a Microsoft Defender que analice los archivos sospechosos (sin dejar que los borre solo).</summary>
     public bool DefenderScanEnabled { get; set; } = true;
@@ -69,6 +72,8 @@ public sealed class DemiurgeOptions
         return Link(new DemiurgeOptions());
     }
 
+    private static string? ToolLockFileName(string id) => External.ToolLock.Get(id)?.Exe;
+
     /// <summary>Asocia cada herramienta con su entrada en tools.lock.json (no se guarda en la config).</summary>
     private static DemiurgeOptions Link(DemiurgeOptions o)
     {
@@ -76,6 +81,8 @@ public sealed class DemiurgeOptions
         o.YaraX.FileName = "yr.exe";
         o.HollowsHunter.LockId = "hollowshunter";
         o.HollowsHunter.FileName = "hollows_hunter.exe";
+        o.Hayabusa.LockId = "hayabusa";
+        o.Hayabusa.FileName = ToolLockFileName("hayabusa") ?? "hayabusa.exe";
         return o;
     }
 

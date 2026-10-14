@@ -15,7 +15,7 @@ scoring:
   accumulation_bonus: 0.20
   accumulation_min_categories: 3
   hard_allowlist_ignores: [H-03, H-04, H-14]
-  never_ignore: [H-01, H-02, H-26, H-27, H-32, H-33]
+  never_ignore: [H-01, H-02, H-26, H-27, H-32, H-33, H-36]
 
 heuristics:
   - id: H-01
@@ -474,8 +474,10 @@ heuristics:
     attack: []
     category: sigma
     phase: v3
-    template: 'Windows registró actividad que coincide con "{regla}".'
-    action: ''
+    template: 'Los registros de Windows muestran {conteo} actividad que coincide con la regla "{regla}" (última: {fecha}).'
+    action: Revisá el detalle técnico. Si no reconocés esa actividad, conviene pedir una segunda opinión.
+    params:
+      critical_weight: 50
 
   - id: H-32
     name: Microsoft Defender confirma malware
@@ -498,3 +500,60 @@ heuristics:
     action: Abrí Seguridad de Windows → Protección contra virus y amenazas → Historial de protección, y eliminá la amenaza. Si no podés, movelo a cuarentena desde acá.
     params:
       days: 30
+
+  - id: H-34
+    name: Programa ejecutado que después desapareció
+    weight: 30
+    severity: Media
+    attack: [T1070.004, T1204]
+    category: execution
+    phase: v2
+    template: '"{nombre}" se ejecutó el {fecha} desde {carpeta} y después desapareció. Los programas que se borran solos después de correr son típicos de los ladrones de contraseñas y de los instaladores de malware.'
+    action: Si no recordás haber ejecutado ese programa, cambiá tus contraseñas importantes desde otro dispositivo y revisá el resto de los hallazgos.
+    params:
+      days: 14
+      # Los instaladores legítimos también se extraen en Temp, se ejecutan y se borran: pesan mucho menos.
+      installer_weight: 10
+      installer_patterns: ['setup', 'install', 'unins', 'update', 'updater', '\.tmp\\', '\\is-[a-z0-9]+\.tmp', '\\ns[a-z0-9]+\.tmp', 'msiexec', 'vc_redist', 'dotnet', 'directx', '\\\{[0-9a-f-]{36}\}\\']
+
+  - id: H-35
+    name: Inicio de sesión por Escritorio remoto
+    weight: 0
+    severity: Pregunta
+    attack: [T1021.001]
+    category: logon
+    phase: v2
+    template: 'Alguien inició sesión en esta PC a distancia (Escritorio remoto) como "{usuario}" desde {ip}: {veces}, la última el {fecha}.'
+    action: Respondé la pregunta para que podamos evaluarlo.
+    question:
+      id: remote_logon_known
+      text: '¿Fuiste vos (o alguien de confianza) quien se conectó a esta PC a distancia como "{usuario}"?'
+      options:
+        - { value: yes, label: 'Sí, fui yo o alguien de confianza', weight: 0 }
+        - { value: no, label: 'No, no fui yo', weight: 80 }
+        - { value: unknown, label: 'No sé', weight: 40 }
+
+  - id: H-36
+    name: Intentos de contraseña fallidos
+    weight: 45
+    severity: Alta
+    attack: [T1110]
+    category: logon
+    phase: v2
+    template: 'Hubo {cantidad} intentos fallidos de iniciar sesión {origen} en menos de 24 horas (cuentas: {cuentas}). Así se ve alguien tratando de adivinar la contraseña.'
+    action: Usá una contraseña larga y única. Si no usás Escritorio remoto, desactivalo (Configuración → Sistema → Escritorio remoto).
+    params:
+      remote_min_failures: 10
+      local_min_failures: 30
+      local_weight: 20
+
+  - id: H-37
+    name: Regla de firewall que deja entrar a un programa sospechoso
+    # 20 y no más: aceptar el aviso del firewall de un juego o herramienta sin firma crea una regla así.
+    weight: 20
+    severity: Media
+    attack: [T1562.004]
+    category: firewall
+    phase: v2
+    template: 'Hay una regla en el firewall ("{regla}") que deja que "{nombre}" reciba conexiones desde afuera ({puertos}). Los programas que controlan una PC a distancia se agregan reglas así.'
+    action: Si no reconocés el programa, desactivá la regla (Firewall de Windows → Configuración avanzada → Reglas de entrada).

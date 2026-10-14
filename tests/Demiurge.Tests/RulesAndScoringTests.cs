@@ -34,7 +34,7 @@ public class RulesAndScoringTests
     public void Embedded_rules_load_and_every_heuristic_has_an_evaluator()
     {
         var rules = RuleSet.Load();
-        Assert.Equal(33, rules.Heuristics.Count);
+        Assert.Equal(37, rules.Heuristics.Count);
         foreach (var h in rules.Heuristics)
             Assert.True(Heuristics.All.ContainsKey(h.Id), $"Sin evaluador: {h.Id}");
         Assert.Equal(20, rules.Scoring.ReviewMin);

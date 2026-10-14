@@ -13,7 +13,8 @@ public sealed class EventLogCollector : ICollector
     public string Name => "Registro de eventos";
     public int Order => 30; // después de COL-19: corrige la fecha de creación de cuentas
 
-    private sealed record Source(string Log, int[] Ids, int Max, Func<EventRecord, bool>? Filter = null);
+    /// <param name="DataFilter">Filtro XPath extra sobre EventData (se aplica en Windows, no en memoria: rápido aun con logs enormes).</param>
+    private sealed record Source(string Log, int[] Ids, int Max, Func<EventRecord, bool>? Filter = null, string? DataFilter = null);
 
     private static readonly string[] SuspiciousScriptTokens =
     [
@@ -35,6 +36,9 @@ public sealed class EventLogCollector : ICollector
                 return SuspiciousScriptTokens.Any(t => text.Contains(t, StringComparison.OrdinalIgnoreCase));
             }),
             new Source("Microsoft-Windows-Windows Defender/Operational", [1116, 1117], 300),
+            // Inicios de sesión por Escritorio remoto (tipo 10) e intentos fallidos (fuerza bruta).
+            new Source("Security", [4624], 300, DataFilter: "EventData[Data[@Name='LogonType']='10']"),
+            new Source("Security", [4625], 5000),
         };
 
         var list = new List<EventInfo>();
@@ -44,7 +48,8 @@ public sealed class EventLogCollector : ICollector
             try
             {
                 var ids = string.Join(" or ", src.Ids.Select(i => $"EventID={i}"));
-                var q = new EventLogQuery(src.Log, PathType.LogName, $"*[System[({ids}) and TimeCreated[timediff(@SystemTime) <= {ms}]]]")
+                var xpath = $"*[System[({ids}) and TimeCreated[timediff(@SystemTime) <= {ms}]]" + (src.DataFilter is null ? "" : $" and {src.DataFilter}") + "]";
+                var q = new EventLogQuery(src.Log, PathType.LogName, xpath)
                 { ReverseDirection = true };
                 using var reader = new EventLogReader(q);
                 int n = 0;
