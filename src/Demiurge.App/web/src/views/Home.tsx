@@ -81,13 +81,14 @@ function HealthList({ items }: { items: Summary["health"]["items"] }) {
 const VERDICT_TONE = { Limpio: "ok", Revisar: "review", ProbableInfeccion: "danger" } as const;
 const VERDICT_LABEL = { Limpio: "Limpio", Revisar: "Revisar", ProbableInfeccion: "Probable infección" } as const;
 
-export function Home({ summary, scanning, progress, onScan, go, openFinding }: {
+export function Home({ summary, scanning, progress, onScan, go, openFinding, openPlan }: {
   summary: Summary | null;
   scanning: boolean;
   progress: Progress | null;
   onScan: (deep: boolean) => void;
   go: (view: string) => void;
   openFinding: (key: string) => void;
+  openPlan: () => void;
 }) {
   const [diff, setDiff] = useState<DiffReport | null>(null);
   useEffect(() => {
@@ -126,6 +127,7 @@ export function Home({ summary, scanning, progress, onScan, go, openFinding }: {
               <div className="cta-row">
                 <button className="btn primary" type="button" onClick={() => onScan(false)}>Escanear ahora</button>
                 <button className="btn" type="button" onClick={() => onScan(true)}>Escaneo profundo</button>
+                {summary.counts.danger + summary.counts.review > 0 && <button className="btn" type="button" onClick={openPlan}>Empezar la limpieza</button>}
                 {summary.findings.length > 0 && <button className="btn ghost" type="button" onClick={() => go("findings")}>Ver hallazgos</button>}
               </div>
             </>

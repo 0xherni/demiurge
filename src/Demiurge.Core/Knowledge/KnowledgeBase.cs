@@ -102,7 +102,7 @@ public sealed class KnowledgeBase
 
     public static KnowledgeBase Load()
     {
-        var external = Path.Combine(DemiurgePaths.Rules, "knowledgebase.json");
+        var external = Path.Combine(DemiurgePaths.Root, "rules", "knowledgebase.json"); // sin crear carpetas (ver RuleSet.Load)
         if (File.Exists(external) && Security.DataDirectoryLockdown.CanTrust(external))
         {
             try { return new KnowledgeBase(File.ReadAllText(external)); }

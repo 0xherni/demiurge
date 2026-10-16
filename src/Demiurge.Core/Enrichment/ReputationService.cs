@@ -36,12 +36,39 @@ public sealed class ReputationService
         _logger = logger;
     }
 
+    /// <summary>Nombre nuevo para no reutilizar la caché de versiones que daban por benigno lo que CIRCL lista como malicioso.</summary>
+    private const string CirclSource = "CIRCL hashlookup";
+
     private TimeSpan Ttl => TimeSpan.FromHours(_options.ReputationTtlHours);
 
     /// <summary>Enriquece todos los binarios del snapshot. Online sólo para los que hace falta.</summary>
     public async Task EnrichAsync(ScanSnapshot snapshot, CancellationToken ct)
     {
         var bins = snapshot.Binaries.Values.Where(b => b.Sha256 is not null).ToList();
+
+        // Programas que ya se borraron pero dejaron su SHA1 en Amcache (un ladrón de contraseñas que corrió y se fue).
+        var gone = snapshot.Executions.Where(x => x.Exists == false && x.Sha1 is not null && Util.PathClassifier.UserWritableFolder(x.Path) is not null).ToList();
+        foreach (var x in gone)
+        {
+            var hit = _feeds.MatchHash(x.Sha1);
+            if (hit is not null) x.Malicious = new ReputationInfo { Source = hit.Source, Verdict = "malicious", Family = hit.Family, Fetched = DateTimeOffset.Now };
+        }
+        if (_options.OnlineHashLookups)
+        {
+            foreach (var x in gone.Where(x => x.Malicious is null).Take(40))
+            {
+                var cached = _db.GetReputation(x.Sha1!, "MalwareBazaar", Ttl);
+                if (cached is null)
+                {
+                    await _bazaarGate.WaitAsync(ct).ConfigureAwait(false);
+                    try { cached = await QueryBazaarAsync(x.Sha1!, ct).ConfigureAwait(false); }
+                    catch (Exception ex) when (ex is not OperationCanceledException) { _logger.LogDebug("MalwareBazaar {Hash}: {Error}", x.Sha1, ex.Message); }
+                    finally { _bazaarGate.Release(); }
+                    if (cached is not null) _db.PutReputation(x.Sha1!, cached);
+                }
+                if (cached?.Verdict == "malicious") x.Malicious = cached;
+            }
+        }
 
         // 1) Feeds locales: siempre.
         foreach (var b in bins)
@@ -55,7 +82,7 @@ public sealed class ReputationService
 
         // 2) CIRCL hashlookup (allowlist): binarios que no firma Microsoft.
         var needCircl = bins.Where(b => b.Signature?.IsMicrosoft != true && b.Malicious is null).ToList();
-        await Task.WhenAll(needCircl.Select(b => WithCache(b, "CIRCL", _circlGate, () => QueryCirclAsync(b.Sha256!, ct), ct))).ConfigureAwait(false);
+        await Task.WhenAll(needCircl.Select(b => WithCache(b, CirclSource, _circlGate, () => QueryCirclAsync(b.Sha256!, ct), ct))).ConfigureAwait(false);
 
         // 3) MalwareBazaar: binarios sin firma válida y no conocidos como benignos.
         var needBazaar = bins.Where(b => b.Signature?.IsValid != true && !b.IsKnownGood && b.Malicious is null).ToList();
@@ -94,19 +121,28 @@ public sealed class ReputationService
         req.Headers.Accept.ParseAdd("application/json");
         using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
         if (resp.StatusCode == HttpStatusCode.NotFound)
-            return new ReputationInfo { Source = "CIRCL", Verdict = "unknown", Fetched = DateTimeOffset.Now };
+            return new ReputationInfo { Source = CirclSource, Verdict = "unknown", Fetched = DateTimeOffset.Now };
         if (!resp.IsSuccessStatusCode) return null;
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
-        string? product = doc.RootElement.TryGetProperty("ProductName", out var pn) ? pn.GetString() : null;
-        return new ReputationInfo { Source = "CIRCL", Verdict = "benign", Family = product, Fetched = DateTimeOffset.Now };
+        return ParseCircl(await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
     }
 
-    private async Task<ReputationInfo?> QueryBazaarAsync(string sha256, CancellationToken ct)
+    internal static ReputationInfo ParseCircl(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        string? product = doc.RootElement.TryGetProperty("ProductName", out var pn) ? pn.GetString() : null;
+        // CIRCL también indexa muestras de malware (campo KnownMalicious, ej. "malshare.com"): estar en su base no
+        // significa ser benigno. Esos nunca entran en la lista blanca (y así siguen pasando por MalwareBazaar y YARA).
+        if (doc.RootElement.TryGetProperty("KnownMalicious", out var km) && km.ValueKind != JsonValueKind.Null)
+            return new ReputationInfo { Source = CirclSource, Verdict = "unknown", Family = $"listado como malicioso por {km}", Fetched = DateTimeOffset.Now };
+        return new ReputationInfo { Source = CirclSource, Verdict = "benign", Family = product, Fetched = DateTimeOffset.Now };
+    }
+
+    private async Task<ReputationInfo?> QueryBazaarAsync(string hash, CancellationToken ct)
     {
         if (_bazaarDisabled) return null;
         using var req = new HttpRequestMessage(HttpMethod.Post, "https://mb-api.abuse.ch/api/v1/")
         {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["query"] = "get_info", ["hash"] = sha256 }),
+            Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["query"] = "get_info", ["hash"] = hash }),
         };
         if (!string.IsNullOrEmpty(_options.AbuseChAuthKey)) req.Headers.Add("Auth-Key", _options.AbuseChAuthKey);
         using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);

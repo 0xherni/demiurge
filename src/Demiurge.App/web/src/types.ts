@@ -112,3 +112,33 @@ export interface Config {
 }
 
 export interface Progress { stage: string; detail?: string; percent: number }
+
+export interface PlanStep {
+  id: string;
+  kind: "manual" | "action" | "questions" | "passwords" | "scan";
+  title: string;
+  body: string;
+  action?: string;
+  entityKey?: string;
+  entityName?: string;
+  level?: "danger" | "review";
+  done: boolean;
+  items: string[];
+  questionId?: string;
+  options?: QuestionOption[];
+}
+export interface PlanPhase { id: string; title: string; why: string; steps: PlanStep[] }
+export interface CleanupPlan { scanId: number; status: "clean" | "cleanup"; intro: string; phases: PlanPhase[] }
+
+export interface TimelineEvent {
+  time?: string;
+  kind: string;
+  title: string;
+  detail?: string;
+  level: "danger" | "review" | "question" | "info" | "ok";
+  entityKey?: string;
+  thread?: string;
+  threadLabel?: string;
+}
+export interface TimelineEpisode { start: string; end: string; title: string; events: TimelineEvent[] }
+export interface Timeline { episodes: TimelineEpisode[]; undated: TimelineEvent[]; note: string }

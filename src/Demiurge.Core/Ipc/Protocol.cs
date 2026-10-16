@@ -24,7 +24,7 @@ public static class Protocol
     public static readonly HashSet<string> Operations =
     [
         "ping", "scan.start", "scan.cancel", "scan.status", "scan.latest", "scan.list", "scan.get",
-        "findings.list", "entity.detail", "inventory", "diff", "answer", "finding.state",
+        "findings.list", "entity.detail", "inventory", "diff", "plan", "timeline", "answer", "finding.state",
         "action.execute", "action.revert", "action.list", "allowlist.list", "allowlist.remove",
         "feeds.update", "config.get", "config.set", "tools.pin",
     ];
@@ -41,7 +41,7 @@ public static class Protocol
     /// un administrador active AllowUnelevatedReads.
     /// </summary>
     public static readonly HashSet<string> ReadOperations =
-        ["scan.list", "scan.get", "findings.list", "entity.detail", "inventory", "diff", "action.list", "allowlist.list", "config.get"];
+        ["scan.list", "scan.get", "findings.list", "entity.detail", "inventory", "diff", "plan", "timeline", "action.list", "allowlist.list", "config.get"];
 
     // Todo lo demás (escanear, cancelar, responder preguntas, allowlist, acciones, ajustes, herramientas, feeds)
     // requiere un proceso elevado: un malware sin privilegios no puede ni marcarse como "reconocido" ni ordenar acciones.

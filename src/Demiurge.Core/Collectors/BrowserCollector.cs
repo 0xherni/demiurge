@@ -268,10 +268,12 @@ public sealed class BrowserCollector : ICollector
         var perm = Path.Combine(dir, "permissions.sqlite");
         if (File.Exists(perm))
         {
-            var tmp = Path.Combine(Path.GetTempPath(), $"demiurge_ffperm_{Guid.NewGuid():N}.sqlite");
+            // Se copia con la ruta verificada (sin enlaces ni hardlinks) a la carpeta protegida de Demiurge, no a la %TEMP%
+            // del usuario: si no, un enlace en el perfil haría que la app elevada copie un archivo ajeno a un lugar legible.
+            var tmp = Path.Combine(DemiurgePaths.Temp, $"ffperm_{Guid.NewGuid():N}.sqlite");
             try
             {
-                File.Copy(perm, tmp, true);
+                Native.SafeFile.CopyOut(perm, tmp);
                 using var conn = new SqliteConnection($"Data Source={tmp};Mode=ReadOnly;Pooling=False");
                 conn.Open();
                 using var cmd = conn.CreateCommand();

@@ -139,4 +139,40 @@ internal static class ProcessNative
         using var id = WindowsIdentity.GetCurrent();
         return new WindowsPrincipal(id).IsInRole(WindowsBuiltInRole.Administrator) || id.IsSystem;
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TOKEN_OWNER { public IntPtr Owner; }
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool SetTokenInformation(IntPtr token, int infoClass, ref TOKEN_OWNER info, int length);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    private const uint TOKEN_ADJUST_DEFAULT = 0x0080;
+    private const int TokenOwner = 4;
+
+    /// <summary>
+    /// Hace que lo que cree este proceso (y sus hijos) quede a nombre del grupo Administradores y no del usuario.
+    /// En Windows 10/11, por defecto, lo que crea un administrador queda a nombre de su usuario, el mismo con el que
+    /// corre cualquier programa sin privilegios: así no se puede distinguir lo que creó Demiurge de lo que plantó otro.
+    /// </summary>
+    public static bool SetDefaultOwnerToAdministrators()
+    {
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_DEFAULT, out var token)) return false;
+        var admins = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+        var sid = new byte[admins.BinaryLength];
+        admins.GetBinaryForm(sid, 0);
+        var handle = GCHandle.Alloc(sid, GCHandleType.Pinned);
+        try
+        {
+            var owner = new TOKEN_OWNER { Owner = handle.AddrOfPinnedObject() };
+            return SetTokenInformation(token, TokenOwner, ref owner, Marshal.SizeOf<TOKEN_OWNER>());
+        }
+        finally
+        {
+            handle.Free();
+            CloseHandle(token);
+        }
+    }
 }

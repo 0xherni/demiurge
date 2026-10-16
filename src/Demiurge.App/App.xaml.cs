@@ -18,7 +18,9 @@ public partial class App : Application
 
         // Una sola instancia: dos motores escribiendo la misma base no tiene sentido.
         _single = new Mutex(true, @"Global\Demiurge.App", out bool first);
-        if (!first)
+        // Cualquier programa puede crear ese mutex antes para que Demiurge nunca abra: sólo se respeta si de verdad hay
+        // otra ventana de Demiurge abierta (el mismo ejecutable).
+        if (!first && AnotherInstanceRunning())
         {
             MessageBox.Show("Demiurge ya está abierto.", "Demiurge", MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown();
@@ -51,6 +53,22 @@ public partial class App : Application
         });
 
         new MainWindow().Show();
+    }
+
+    private static bool AnotherInstanceRunning()
+    {
+        var self = Environment.ProcessPath;
+        using var me = System.Diagnostics.Process.GetCurrentProcess();
+        foreach (var p in System.Diagnostics.Process.GetProcessesByName(me.ProcessName))
+        {
+            using (p)
+            {
+                if (p.Id == me.Id) continue;
+                try { if (string.Equals(p.MainModule?.FileName, self, StringComparison.OrdinalIgnoreCase)) return true; }
+                catch { /* sin acceso: no es nuestra */ }
+            }
+        }
+        return false;
     }
 
     private void OnUnhandled(object sender, DispatcherUnhandledExceptionEventArgs e)

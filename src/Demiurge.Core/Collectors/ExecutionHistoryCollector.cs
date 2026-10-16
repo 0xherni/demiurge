@@ -13,6 +13,9 @@ namespace Demiurge.Core.Collectors;
 ///  - PCA (Program Compatibility Assistant): en Windows 11, %windir%\appcompat\pca\PcaAppLaunchDic.txt con ruta y fecha;
 ///    en Windows 10, el registro Compatibility Assistant\Store con rutas.
 ///  - Prefetch: %windir%\Prefetch\NOMBRE.EXE-HASH.pf (sólo nombre; las fechas del archivo aproximan primera/última ejecución).
+///  - Amcache (%windir%\appcompat\Programs\Amcache.hve): ruta, editor y SHA1 de lo que se ejecutó o instaló, aunque ya
+///    se haya borrado. Con el SHA1 se puede saber si era un malware conocido.
+///  - ShimCache (AppCompatCache): rutas de ejecutables que Windows vio; suma evidencia de archivos que ya no existen.
 /// Es clave para ver infecciones que ya pasaron: un ladrón de contraseñas típico corre una vez y se borra.
 /// </summary>
 public sealed class ExecutionHistoryCollector : ICollector
@@ -145,6 +148,52 @@ public sealed class ExecutionHistoryCollector : ICollector
             warnings.Add("PcaAppLaunchDic.txt no se pudo leer");
         }
 
+        // ---- Amcache ----
+        try
+        {
+            foreach (var a in ReadAmcache())
+            {
+                if (byPath.TryGetValue(a.Path!, out var r))
+                {
+                    if (!r.Sources.Contains("Amcache")) r.Sources.Add("Amcache");
+                    r.Sha1 ??= a.Sha1;
+                    r.Publisher ??= a.Publisher;
+                    r.FirstRun ??= a.FirstRun;
+                }
+                // Lo nuevo que aporta Amcache sólo interesa en carpetas de usuario (donde vive el malware) y reciente.
+                else if (PathClassifier.UserWritableFolder(a.Path) is not null && a.FirstRun >= since)
+                    byPath[a.Path!] = a;
+            }
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or System.ComponentModel.Win32Exception or System.Security.SecurityException)
+        {
+            warnings.Add("Amcache requiere permisos de administrador");
+        }
+
+        // ---- ShimCache ----
+        try
+        {
+            using var k = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache");
+            if (k?.GetValue("AppCompatCache") is byte[] data)
+            {
+                foreach (var (path, modified) in ParseShimCache(data).Take(1024))
+                {
+                    if (byPath.TryGetValue(path, out var r))
+                    {
+                        if (!r.Sources.Contains("ShimCache")) r.Sources.Add("ShimCache");
+                    }
+                    // La fecha de ShimCache es la de modificación del archivo, no la de ejecución: sirve sólo para filtrar
+                    // (lo descargado hace poco tiene fecha reciente) y no se usa como "última ejecución".
+                    else if (PathClassifier.UserWritableFolder(path) is not null && modified >= since)
+                        byPath[path] = new ExecutionRecord { Path = path, Name = Path.GetFileName(path), Sources = ["ShimCache"] };
+                }
+            }
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or ArgumentException)
+        {
+            warnings.Add("ShimCache no se pudo leer");
+        }
+
         // ---- Prefetch (sólo nombre) ----
         var prefetchOnly = new List<ExecutionRecord>();
         try
@@ -190,6 +239,87 @@ public sealed class ExecutionHistoryCollector : ICollector
         var all = byPath.Values.Concat(prefetchOnly).ToList();
         ctx.Snapshot.AddRange(ctx.Snapshot.Executions, all);
         return Task.FromResult(new CollectorResult { ItemCount = all.Count, Warnings = warnings.Distinct().ToList() });
+    }
+
+    /// <summary>
+    /// Amcache.hve: Root\InventoryApplicationFile\* (Windows 10 1709+). FileId = "0000" + SHA1 (de los primeros ~31 MB).
+    /// Si el hive no está en uso se copia (con sus logs) y se abre la copia, para no tocar el original; si Windows lo tiene
+    /// abierto, se comparte el que ya está cargado.
+    /// </summary>
+    private static List<ExecutionRecord> ReadAmcache()
+    {
+        var result = new List<ExecutionRecord>();
+        var hivePath = Path.Combine(PathClassifier.WindowsDir, @"appcompat\Programs\Amcache.hve");
+        if (!File.Exists(hivePath)) return result;
+
+        string? copyDir = null;
+        string target;
+        try
+        {
+            copyDir = Path.Combine(DemiurgePaths.Root, "tmp", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(copyDir);
+            foreach (var suffix in new[] { "", ".LOG1", ".LOG2" })
+            {
+                var src = hivePath + suffix;
+                if (!File.Exists(src)) continue;
+                using var input = new FileStream(src, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var output = File.Create(Path.Combine(copyDir, "Amcache.hve" + suffix));
+                input.CopyTo(output);
+            }
+            target = Path.Combine(copyDir, "Amcache.hve");
+        }
+        catch (IOException)
+        {
+            target = hivePath; // en uso por Windows: se comparte el hive ya cargado
+        }
+
+        try
+        {
+            using var root = RegistryNative.LoadAppHive(target);
+            using var files = root.OpenSubKey(@"Root\InventoryApplicationFile");
+            if (files is null) return result;
+            foreach (var id in files.GetSubKeyNames())
+            {
+                using var e = files.OpenSubKey(id);
+                if (e?.GetValue("LowerCaseLongPath") is not string path || path.Length < 4) continue;
+                var fileId = e.GetValue("FileId") as string;
+                result.Add(new ExecutionRecord
+                {
+                    Path = path,
+                    Name = Path.GetFileName(path),
+                    Sources = ["Amcache"],
+                    Sha1 = fileId is { Length: 44 } ? fileId[4..].ToLowerInvariant() : null,
+                    Publisher = e.GetValue("Publisher") is string { Length: > 0 } pub ? pub : null,
+                    FirstRun = RegistryNative.LastWrite(e),
+                });
+            }
+        }
+        finally
+        {
+            if (copyDir is not null)
+                try { Directory.Delete(copyDir, recursive: true); } catch { /* el hive se descarga al cerrar la clave */ }
+        }
+        return result;
+    }
+
+    /// <summary>AppCompatCache de Windows 10/11: cabecera de 0x30/0x34 bytes y entradas "10ts".</summary>
+    internal static IEnumerable<(string Path, DateTimeOffset? Modified)> ParseShimCache(byte[] data)
+    {
+        if (data.Length < 0x34) yield break;
+        int offset = BitConverter.ToInt32(data, 0);
+        if (offset is not (0x30 or 0x34)) yield break;
+        while (offset + 14 <= data.Length)
+        {
+            if (data[offset] != '1' || data[offset + 1] != '0' || data[offset + 2] != 't' || data[offset + 3] != 's') yield break;
+            int entrySize = BitConverter.ToInt32(data, offset + 8);
+            int pathLen = BitConverter.ToUInt16(data, offset + 12);
+            if (entrySize <= 0 || offset + 14 + pathLen + 8 > data.Length) yield break;
+            var path = System.Text.Encoding.Unicode.GetString(data, offset + 14, pathLen);
+            if (path.StartsWith(@"\??\", StringComparison.Ordinal)) path = path[4..];
+            var modified = FileTime(BitConverter.ToInt64(data, offset + 14 + pathLen));
+            if (path.Length > 2 && path[1] == ':') yield return (path, modified);
+            offset += 12 + entrySize;
+        }
     }
 
     private static DateTimeOffset? FileTime(long ft)

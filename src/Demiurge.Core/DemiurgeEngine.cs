@@ -51,7 +51,7 @@ public sealed class DemiurgeEngine : IAsyncDisposable
         Kb = KnowledgeBase.Load();
         Text = new TextCatalog(Options.Language);
 
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(60), MaxResponseContentBufferSize = 200L * 1024 * 1024 };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd($"Demiurge/{ScanOrchestrator.AppVersion} (+home security dashboard)");
         _feedUpdater = new FeedUpdater(_http, Options, logger);
 
@@ -132,6 +132,8 @@ public sealed class DemiurgeEngine : IAsyncDisposable
             "entity.detail" => EntityDetail(req),
             "inventory" => Inventory(req),
             "diff" => RequireLatest(req) is { } d ? Orchestrator.Diff(d) : null,
+            "plan" => Story.CleanupPlanBuilder.Build(RequireLatest(req), Db.GetActions(500), Text),
+            "timeline" => Story.TimelineBuilder.Build(RequireLatest(req), Db.GetActions(500)),
             "answer" => Answer(req),
             "finding.state" => SetFindingState(req),
             "action.execute" => ExecuteAction(req),
@@ -388,7 +390,14 @@ public sealed class DemiurgeEngine : IAsyncDisposable
     {
         var a = req.Args ?? new JsonObject();
         if (a["onlineHashLookups"] is JsonValue o && o.TryGetValue<bool>(out var ob)) Options.OnlineHashLookups = ob;
-        if (a.ContainsKey("virusTotalApiKey")) Options.VirusTotalApiKey = a["virusTotalApiKey"]?.ToString() is { Length: > 0 } vt ? vt : null;
+        if (a.ContainsKey("virusTotalApiKey"))
+        {
+            var vt = a["virusTotalApiKey"]?.ToString()?.Trim();
+            // Las claves de VirusTotal son 64 caracteres hexadecimales: así se detecta una clave copiada a medias.
+            if (!string.IsNullOrEmpty(vt) && !System.Text.RegularExpressions.Regex.IsMatch(vt, "^[0-9a-fA-F]{64}$"))
+                throw new ArgumentException("Esa clave no parece completa: tiene que ser una tira de 64 letras y números. Copiala de nuevo desde tu perfil en virustotal.com.");
+            Options.VirusTotalApiKey = string.IsNullOrEmpty(vt) ? null : vt;
+        }
         if (a.ContainsKey("abuseChAuthKey")) Options.AbuseChAuthKey = a["abuseChAuthKey"]?.ToString() is { Length: > 0 } ab ? ab : null;
         if (a["feedUpdateHours"] is JsonValue f && f.TryGetValue<int>(out var fh)) Options.FeedUpdateHours = Math.Clamp(fh, 1, 168);
         if (a["yaraXEnabled"] is JsonValue y && y.TryGetValue<bool>(out var yb)) Options.YaraX.Enabled = yb;

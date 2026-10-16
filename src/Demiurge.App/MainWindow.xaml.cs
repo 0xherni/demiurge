@@ -43,19 +43,48 @@ public partial class MainWindow : Window
             return;
         }
 
-        CoreWebView2Environment env;
         try
         {
-            // Carpeta de datos propia del WebView (no se comparte con Edge ni con otras apps).
-            var data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Demiurge", "WebView2");
-            env = await CoreWebView2Environment.CreateAsync(null, data);
+            await StartWebViewAsync(ui);
         }
         catch (WebView2RuntimeNotFoundException)
         {
             Loading.Text = "Falta Microsoft Edge WebView2 Runtime. Instalalo desde Windows Update o desde el sitio de Microsoft y volvé a abrir Demiurge.";
-            return;
         }
+        catch (Exception ex)
+        {
+            // Nunca quedarse en "Inicializando" sin decir nada.
+            App.Log.LogError(ex, "No se pudo iniciar la interfaz");
+            Loading.Text = $"No se pudo iniciar la interfaz de Demiurge.\n\n{ex.Message}\n\nCerrá y volvé a abrir la app. Si se repite, el detalle quedó en el log.";
+        }
+    }
 
+    /// <summary>
+    /// Perfil del navegador interno: una carpeta NUEVA en cada apertura (nombre aleatorio) dentro de %LOCALAPPDATA%, y se
+    /// borran las de aperturas anteriores. Tiene que estar en una carpeta del usuario porque los procesos internos del
+    /// navegador corren con permisos reducidos y no pueden usar una carpeta sólo de administradores. Al ser nueva cada vez,
+    /// nada que otro programa deje ahí entre sesiones (por ejemplo, un service worker) llega a cargarse en la interfaz.
+    /// </summary>
+    private static string NewProfileFolder()
+    {
+        var parent = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Demiurge", "WebView2");
+        Directory.CreateDirectory(parent);
+        foreach (var old in Directory.EnumerateDirectories(parent, "s-*"))
+        {
+            try
+            {
+                // Sólo si la ruta real es exactamente la esperada (sin enlaces en el camino); si no, se deja como está.
+                SafeFile.VerifyDirectory(old);
+                if (!File.GetAttributes(old).HasFlag(FileAttributes.ReparsePoint)) Directory.Delete(old, recursive: true);
+            }
+            catch { /* en uso o redirigida: se ignora */ }
+        }
+        return Path.Combine(parent, "s-" + Guid.NewGuid().ToString("N"));
+    }
+
+    private async Task StartWebViewAsync(string ui)
+    {
+        var env = await CoreWebView2Environment.CreateAsync(null, NewProfileFolder());
         await Web.EnsureCoreWebView2Async(env);
         var core = Web.CoreWebView2;
         var s = core.Settings;
@@ -82,6 +111,10 @@ public partial class MainWindow : Window
                 e.Cancel = true;
                 App.Log.LogWarning("Navegación bloqueada: {Uri}", e.Uri);
             }
+        };
+        core.FrameNavigationStarting += (_, e) =>
+        {
+            if (!e.Uri.StartsWith(Origin, StringComparison.OrdinalIgnoreCase)) e.Cancel = true;
         };
         // Abrir el navegador desde un proceso elevado lo dejaría elevado: no se abren ventanas ni links externos.
         core.NewWindowRequested += (_, e) => e.Handled = true;

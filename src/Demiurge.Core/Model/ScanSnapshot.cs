@@ -27,6 +27,8 @@ public sealed class ScanSnapshot
     public List<DriverInfo> Drivers { get; set; } = new();
     public List<ExecutionRecord> Executions { get; set; } = new();
     public List<FirewallRule> FirewallRules { get; set; } = new();
+    public List<TypedCommand> Commands { get; set; } = new();
+    public List<AppIntegrityInfo> AppIntegrity { get; set; } = new();
     public DefenderStatus Defender { get; set; } = new();
     public List<string> HostsEntries { get; set; } = new();
 
@@ -68,6 +70,8 @@ public sealed class ScanSnapshot
         foreach (var x in Drivers) yield return x;
         foreach (var x in Executions) yield return x;
         foreach (var x in FirewallRules) yield return x;
+        foreach (var x in Commands) yield return x;
+        foreach (var x in AppIntegrity) yield return x;
     }
 
     public BinaryInfo? GetBinary(string? key) =>

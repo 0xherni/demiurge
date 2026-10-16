@@ -229,3 +229,64 @@ details.tech[open] summary::before { content: "▾ "; }
 /* Dentro de un recuadro, las listas no llevan línea arriba ni abajo: el recuadro ya las encuadra. */
 .box .mini button:first-child, .box .health div:first-child { border-top: 0; }
 .box .mini button:last-child, .box .health div:last-child { border-bottom: 0; }
+
+/* ---------- Glosario ---------- */
+.term { border-bottom: 1px dotted var(--ash); cursor: help; }
+.term:hover, .term:focus-visible { border-bottom-color: var(--blood); outline: none; color: var(--bone); }
+.tip { position: fixed; z-index: 50; width: 300px; background: var(--void); border: 1px solid var(--seam); border-left: 2px solid var(--blood); border-radius: var(--r); padding: 10px 12px; font-size: 13px; line-height: 1.45; color: var(--bone); font-weight: 400; box-shadow: 0 8px 24px rgba(0, 0, 0, .5); pointer-events: none; text-transform: none; letter-spacing: normal; }
+.tip b { display: block; font-weight: 600; margin-bottom: 3px; text-transform: capitalize; }
+
+/* ---------- Plan de limpieza ---------- */
+.plan { display: grid; gap: 22px; }
+.plan-head { display: grid; gap: 14px; max-width: 640px; }
+.phase { border: 1px solid var(--seam); border-radius: var(--r); background: var(--slab); }
+.phase > header { display: grid; grid-template-columns: 34px 1fr; gap: 14px; padding: 16px 20px; border-bottom: 1px solid var(--seam); align-items: start; }
+.phase > header p { margin: 4px 0 0; color: var(--ash); font-size: 13px; max-width: 70ch; }
+.phase .num { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--blood-deep); color: var(--bone); display: grid; place-items: center; font-family: var(--display); font-size: 13px; font-weight: 600; }
+.steps { display: grid; }
+.pstep { display: grid; grid-template-columns: 22px 1fr auto; gap: 14px; padding: 14px 20px; align-items: start; }
+.pstep + .pstep { border-top: 1px solid var(--seam); }
+.pstep .tick { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--ash-2); display: grid; place-items: center; font-size: 12px; margin-top: 1px; }
+.pstep[data-done="true"] .tick { background: var(--ok); border-color: var(--ok); color: var(--void); font-weight: 700; }
+.pstep[data-done="true"] .pt { color: var(--ash); text-decoration: line-through; text-decoration-color: var(--ash-2); }
+.pbody { display: grid; gap: 6px; min-width: 0; }
+.pt { font-weight: 500; overflow-wrap: anywhere; }
+.pd { color: var(--ash); font-size: 13px; max-width: 70ch; }
+.pbody .opts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.plist { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
+.plist .check { color: var(--bone); align-items: flex-start; }
+.plist .check input { margin-top: 3px; }
+.pact { display: grid; gap: 8px; justify-items: end; }
+
+/* ---------- Qué pasó ---------- */
+.timeline { display: grid; gap: 26px; }
+.episode { display: grid; gap: 10px; }
+.episode h2 { font-size: 14px; }
+.tlist { list-style: none; margin: 0; padding: 0; display: grid; position: relative; }
+.tlist::before { content: ""; position: absolute; left: 63px; top: 8px; bottom: 8px; width: 1px; background: var(--seam); }
+.tev { display: grid; grid-template-columns: 48px 10px 1fr; gap: 0 14px; padding: 9px 0; align-items: start; }
+.tev .tt { color: var(--ash-2); font-size: 12px; padding-top: 3px; text-align: right; }
+.tev .tdot { width: 9px; height: 9px; border-radius: 50%; margin-top: 7px; position: relative; z-index: 1; box-shadow: 0 0 0 3px var(--ink); }
+.tw { display: grid; gap: 2px; min-width: 0; }
+.tw .tk { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--ash-2); }
+.tw .tn { font-weight: 500; overflow-wrap: anywhere; }
+.tw .td { color: var(--ash); font-size: 13px; overflow-wrap: anywhere; }
+.tmeta { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 2px; }
+.thread { font-family: var(--mono); font-size: 11px; color: var(--review); border: 1px solid var(--seam); border-radius: 4px; padding: 1px 6px; }
+
+/* ---------- Ajustes: recomendación y guía de VirusTotal ---------- */
+.set > div { display: grid; gap: 6px; min-width: 0; }
+.set > div > p { margin: 0; }
+.rec-head { margin: 0; max-width: 66ch; padding: 10px 14px; border: 1px solid var(--seam); border-left: 2px solid var(--ok); border-radius: var(--r); background: var(--slab); color: var(--bone); font-weight: 500; }
+.vt { display: grid; gap: 10px; margin-top: 6px; padding: 14px 16px; border: 1px solid var(--seam); border-radius: var(--r); background: var(--slab); max-width: 60ch; }
+.vt-why { margin: 0; font-size: 13px; color: var(--bone) !important; }
+.vt-why strong { color: var(--review); font-weight: 600; }
+.vt-steps { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 13px; color: var(--ash); }
+.vt-steps li::marker { color: var(--blood); font-family: var(--mono); }
+.vt-steps strong { color: var(--bone); font-weight: 500; }
+.vt-url { color: var(--bone); }
+.vt-form { display: flex; gap: 8px; flex-wrap: wrap; }
+.vt-input { flex: 1; min-width: 0; }
+.vt-err { font-size: 12px; color: var(--danger); }
+.vt-ok { font-size: 13px; color: var(--ok); }
+.vt-note { margin: 0; font-size: 12px; color: var(--ash-2) !important; }

@@ -38,11 +38,34 @@ public sealed class SignatureInfo
     public string? Issuer { get; set; }
     public DateTimeOffset? SigningTime { get; set; }
     public string? Error { get; set; }
+    /// <summary>Huella (SHA1) del certificado raíz en el que termina la cadena de la firma, verificada criptográficamente.</summary>
+    public string? RootThumbprint { get; set; }
+    /// <summary>true si se intentó verificar la cadena (los escaneos guardados antes de esta versión no la tienen).</summary>
+    public bool ChainChecked { get; set; }
 
+    /// <summary>
+    /// Raíces de Microsoft para firma de código. No se incluye "Identity Verification Root 2020": la usa Azure Trusted
+    /// Signing para firmar software de terceros.
+    /// </summary>
+    public static readonly HashSet<string> MicrosoftRoots = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "8F43288AD272F3103B6FB1428485EA3014C0BCFE", // Microsoft Root Certificate Authority 2011
+        "3B1EFD3A66EA28B16697394703A72CA340A05BD5", // Microsoft Root Certificate Authority 2010
+        "CDD4EEAE6000AC7F40C3802C171E30148030C072", // Microsoft Root Certificate Authority (2001)
+        "A43489159A520F0D93D032CCAF37E7FE20A8B419", // Microsoft Root Authority (1997)
+        "06F1AA330B927B753A40E68CDF22E34BCBEF3352", // Microsoft ECC Product Root Certificate Authority 2018
+    };
+
+    /// <summary>
+    /// Firmado por Microsoft: firma válida, firmante de Microsoft Y cadena que termina en una raíz de Microsoft. Sólo
+    /// con el nombre alcanzaba con que un malware instale su propio certificado raíz y firme a nombre de "Microsoft
+    /// Corporation" para quedar en la lista blanca y fuera de los análisis.
+    /// </summary>
     [JsonIgnore]
     public bool IsMicrosoft => IsValid && Signer is not null &&
         (Signer.Contains("Microsoft Windows", StringComparison.OrdinalIgnoreCase) ||
-         Signer.Contains("Microsoft Corporation", StringComparison.OrdinalIgnoreCase));
+         Signer.Contains("Microsoft Corporation", StringComparison.OrdinalIgnoreCase)) &&
+        (!ChainChecked || (RootThumbprint is not null && MicrosoftRoots.Contains(RootThumbprint)));
 }
 
 public sealed class ReputationInfo
@@ -369,6 +392,11 @@ public sealed class ExecutionRecord : IEntity
     /// <summary>Si el archivo sigue en el disco.</summary>
     public bool? Exists { get; set; }
     public string? BinaryKey { get; set; }
+    /// <summary>SHA1 que guarda Amcache (sirve para consultar programas que ya se borraron).</summary>
+    public string? Sha1 { get; set; }
+    public string? Publisher { get; set; }
+    /// <summary>Reputación del hash de Amcache cuando el archivo ya no existe (si existe, se usa la del binario).</summary>
+    public ReputationInfo? Malicious { get; set; }
 
     public EntityKind Kind => EntityKind.Execution;
     public string Key => "exec:" + (Path ?? Name).ToLowerInvariant();
@@ -401,4 +429,52 @@ public sealed class FirewallRule : IEntity
     public EntityKind Kind => EntityKind.FirewallRule;
     public string Key => $"fw:{Store}|{Id}".ToLowerInvariant();
     public string DisplayName => Name;
+}
+
+/// <summary>
+/// COL-29: comando escrito o pegado por una persona: en Ejecutar (Win+R), en la barra de direcciones del Explorador o en
+/// PowerShell. Es donde terminan las estafas "ClickFix" ("para verificar que sos humano, apretá Win+R y pegá esto").
+/// </summary>
+public sealed class TypedCommand : IEntity
+{
+    /// <summary>run (Win+R) | explorer (barra del Explorador) | powershell (historial de PowerShell)</summary>
+    public string Source { get; set; } = "";
+    public string Command { get; set; } = "";
+    public string? User { get; set; }
+    /// <summary>0 = el más reciente de esa fuente.</summary>
+    public int Position { get; set; }
+    /// <summary>Sólo para el más reciente de Win+R (fecha de modificación de la clave).</summary>
+    public DateTimeOffset? When { get; set; }
+
+    public EntityKind Kind => EntityKind.TypedCommand;
+    public string Key => $"cmd:{Source}:{(User ?? "").ToLowerInvariant()}:{Hash(Command)}";
+    public string DisplayName => Command.Length > 70 ? Command[..67] + "…" : Command;
+
+    private static string Hash(string s) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(s.Trim().ToLowerInvariant())))[..16].ToLowerInvariant();
+}
+
+/// <summary>
+/// COL-30: archivo de una aplicación que los ladrones de cuentas modifican para quedarse adentro (por ejemplo el
+/// index.js de Discord, que en una instalación limpia tiene una sola línea).
+/// </summary>
+public sealed class AppIntegrityInfo : IEntity
+{
+    public string App { get; set; } = "";
+    public string Path { get; set; } = "";
+    public string? User { get; set; }
+    /// <summary>original | mod (modificación conocida y legítima, ej. BetterDiscord) | modified</summary>
+    public string Status { get; set; } = "original";
+    public string? ModName { get; set; }
+    public List<string> Indicators { get; set; } = new();
+    public long Size { get; set; }
+    /// <summary>Última modificación del archivo (cuándo se le agregó el código).</summary>
+    public DateTimeOffset? Modified { get; set; }
+    public string? Sha256 { get; set; }
+    /// <summary>Comienzo del contenido agregado (para mostrar y para el reporte).</summary>
+    public string? Excerpt { get; set; }
+
+    public EntityKind Kind => EntityKind.AppIntegrity;
+    public string Key => "app:" + Path.ToLowerInvariant();
+    public string DisplayName => App;
 }

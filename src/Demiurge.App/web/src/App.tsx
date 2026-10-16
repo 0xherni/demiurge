@@ -6,7 +6,7 @@ import { useToast } from "./components/ui";
 import { relativeDate } from "./labels";
 import type { Progress, Summary } from "./types";
 import { Activity } from "./views/Activity";
-import { Findings } from "./views/Findings";
+import { Findings, type FindingsTab } from "./views/Findings";
 import { Home } from "./views/Home";
 import { Inventory } from "./views/Inventory";
 import { News } from "./views/News";
@@ -27,6 +27,7 @@ export function App() {
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
+  const [findingsTab, setFindingsTab] = useState<FindingsTab>("cards");
   // Se incrementa cada vez que algo cambia (escaneo, acción, respuesta) para que las pantallas recarguen.
   const [version, setVersion] = useState(0);
   const toast = useToast();
@@ -70,8 +71,9 @@ export function App() {
     }
   }
 
-  const go = (v: string) => { setFocus(null); setView(v); document.querySelector(".main")?.scrollTo(0, 0); };
-  const openFinding = (key: string) => { setFocus(key); setView("findings"); };
+  const go = (v: string) => { setFocus(null); if (v === "findings") setFindingsTab("cards"); setView(v); document.querySelector(".main")?.scrollTo(0, 0); };
+  const openFinding = (key: string) => { setFocus(key); setFindingsTab("cards"); setView("findings"); };
+  const openPlan = () => { setFocus(null); setFindingsTab("plan"); setView("findings"); document.querySelector(".main")?.scrollTo(0, 0); };
   const pending = summary ? summary.counts.danger + summary.counts.review + summary.counts.questions : 0;
 
   return (
@@ -90,8 +92,8 @@ export function App() {
         </div>
       </nav>
       <main className="main">
-        {view === "home" && <Home summary={summary} scanning={scanning} progress={progress} onScan={scan} go={go} openFinding={openFinding} />}
-        {view === "findings" && <Findings version={version} focus={focus} onChanged={refresh} />}
+        {view === "home" && <Home summary={summary} scanning={scanning} progress={progress} onScan={scan} go={go} openFinding={openFinding} openPlan={openPlan} />}
+        {view === "findings" && <Findings version={version} focus={focus} tab={findingsTab} setTab={setFindingsTab} onChanged={refresh} onScan={() => scan(false)} openFinding={openFinding} />}
         {view === "inventory" && <Inventory version={version} />}
         {view === "news" && <News version={version} />}
         {view === "activity" && <Activity version={version} onChanged={refresh} />}

@@ -22,6 +22,8 @@ internal static class Render
                                             startup | processes | connections | extensions | software |
                                             accounts | settings | certificates | drivers | files  (capa 3)
               diff                          Novedades desde el escaneo anterior
+              plan                          Plan de limpieza paso a paso
+              timeline                      Qué pasó y cuándo (línea de tiempo)
               answer <clave> <pregunta> <respuesta>
                                             Responder una pregunta (ej. ¿Instalaste vos AnyDesk?)
               ack <H-xx> <clave> [Visto|Ignorado|Resuelto]
@@ -29,7 +31,7 @@ internal static class Render
                                             disable_startup | kill_process | quarantine | remove_exclusion |
                                             restore_hosts | restore_proxy | restore_browser | remove_extension |
                                             remove_notifications | disable_account | remove_certificate |
-                                            remove_wmi | remove_ifeo | allowlist
+                                            remove_wmi | remove_ifeo | repair_app | allowlist
               actions / revert <id>         Historial de acciones / deshacer una acción
               allowlist [remove <clave>]    Ítems marcados como "lo reconozco"
               feeds                         Actualizar feeds de inteligencia
@@ -48,6 +50,46 @@ internal static class Render
         Console.Write(question + " [s/N] ");
         var a = Console.ReadLine()?.Trim().ToLowerInvariant();
         return a is "s" or "si" or "sí" or "y" or "yes";
+    }
+
+    public static void Plan(JsonNode n)
+    {
+        Console.WriteLine($"  {n["intro"]}");
+        int i = 1;
+        foreach (var phase in n["phases"]!.AsArray())
+        {
+            Console.WriteLine();
+            Console.WriteLine($"  {i++}. {phase!["title"]}");
+            Console.WriteLine($"     {phase["why"]}");
+            foreach (var st in phase["steps"]!.AsArray())
+            {
+                var done = st!["done"]?.GetValue<bool>() == true ? "✓" : "·";
+                Console.WriteLine($"     {done} {st["title"]}" + (st["action"] is { } a ? $"   [demiurge action {a} \"{st["entityKey"]}\"]" : ""));
+                foreach (var it in st["items"]?.AsArray() ?? []) Console.WriteLine($"         - {it}");
+            }
+        }
+    }
+
+    public static void Timeline(JsonNode n)
+    {
+        Console.WriteLine($"  {n["note"]}");
+        foreach (var ep in n["episodes"]!.AsArray())
+        {
+            Console.WriteLine();
+            Console.WriteLine($"  {ep!["title"]}");
+            foreach (var e in ep["events"]!.AsArray())
+            {
+                var t = DateTimeOffset.TryParse(e!["time"]?.ToString(), out var d) ? d.ToLocalTime().ToString("HH:mm") : "--:--";
+                Console.WriteLine($"    {t}  [{e["level"]}] {e["title"]}" + (e["detail"] is { } det ? $" — {det}" : "") + (e["threadLabel"] is { } th ? $"  ({th})" : ""));
+            }
+        }
+        var undated = n["undated"]?.AsArray();
+        if (undated is { Count: > 0 })
+        {
+            Console.WriteLine();
+            Console.WriteLine("  Sin fecha");
+            foreach (var e in undated) Console.WriteLine($"    [{e!["level"]}] {e["title"]}" + (e["detail"] is { } det ? $" — {det}" : ""));
+        }
     }
 
     public static void Json(JsonNode? n) => Console.WriteLine(n?.ToJsonString(new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) ?? "null");

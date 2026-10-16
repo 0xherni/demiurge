@@ -140,8 +140,16 @@ public sealed class YaraXScanner
         {
             var bytes = await http.GetByteArrayAsync(url, ct).ConfigureAwait(false);
             using var zip = new ZipArchive(new MemoryStream(bytes));
+            // Sólo el nombre del archivo (nunca carpetas del zip) y con topes de tamaño: un zip manipulado no puede escribir
+            // fuera de la carpeta de reglas ni llenar el disco.
+            long total = 0;
             foreach (var entry in zip.Entries.Where(e => e.Name.EndsWith(".yar", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (entry.Length > 32L * 1024 * 1024 || (total += entry.Length) > 512L * 1024 * 1024)
+                    throw new InvalidDataException("El paquete de reglas YARA es más grande de lo esperado; no se usa.");
+                if (entry.Name != Path.GetFileName(entry.Name) || entry.Name.StartsWith('.')) continue;
                 entry.ExtractToFile(Path.Combine(dir, entry.Name), overwrite: true);
+            }
             // Atribución requerida por las licencias de las reglas.
             await File.WriteAllTextAsync(Path.Combine(dir, "CREDITS.txt"),
                 "Reglas YARA de YARA Forge (https://github.com/YARAHQ/yara-forge). Cada regla conserva su autor y licencia en sus metadatos.\n" +
@@ -310,25 +318,13 @@ public sealed class HayabusaScanner
 }
 
 /// <summary>
-/// EXT-04 (v3, opt-in): Sysmon. No se empaqueta: se descarga de Microsoft al momento, se verifica la
-/// firma y se instala con la config de SwiftOnSecurity. Luego se lee su log como historial.
+/// EXT-04 (opt-in): si el usuario ya tiene Sysmon instalado, se lee su log como historial de procesos. Demiurge no lo
+/// descarga ni lo instala (ese código se quitó: instalar software desde internet en un proceso elevado es superficie de
+/// ataque que no hace falta).
 /// </summary>
-public sealed class SysmonIntegration
+public static class SysmonIntegration
 {
-    private const string SysmonZip = "https://download.sysinternals.com/files/Sysmon.zip";
-    private const string ConfigUrl = "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/master/sysmonconfig-export.xml";
     public const string LogName = "Microsoft-Windows-Sysmon/Operational";
-
-    private readonly HttpClient _http;
-    private readonly ExternalRunner _runner;
-    private readonly ILogger _logger;
-
-    public SysmonIntegration(HttpClient http, ExternalRunner runner, ILogger logger)
-    {
-        _http = http;
-        _runner = runner;
-        _logger = logger;
-    }
 
     public static bool IsInstalled()
     {
@@ -341,23 +337,6 @@ public sealed class SysmonIntegration
         {
             return false;
         }
-    }
-
-    public async Task<string> InstallAsync(CancellationToken ct)
-    {
-        var dir = DemiurgePaths.Ensure(Path.Combine(DemiurgePaths.Tools, "sysmon"));
-        var zip = Path.Combine(dir, "Sysmon.zip");
-        await File.WriteAllBytesAsync(zip, await _http.GetByteArrayAsync(SysmonZip, ct).ConfigureAwait(false), ct).ConfigureAwait(false);
-        ZipFile.ExtractToDirectory(zip, dir, overwriteFiles: true);
-        var exe = Path.Combine(dir, Environment.Is64BitOperatingSystem ? "Sysmon64.exe" : "Sysmon.exe");
-        var sig = WinTrust.Verify(exe);
-        if (!sig.IsValid || sig.Signer?.Contains("Microsoft", StringComparison.OrdinalIgnoreCase) != true)
-            throw new InvalidOperationException("Sysmon descargado no tiene firma válida de Microsoft; instalación cancelada.");
-        var config = Path.Combine(dir, "sysmonconfig.xml");
-        await File.WriteAllTextAsync(config, await _http.GetStringAsync(ConfigUrl, ct).ConfigureAwait(false), ct).ConfigureAwait(false);
-        var r = await _runner.RunAsync(exe, ["-accepteula", "-i", config], TimeSpan.FromMinutes(2), ct).ConfigureAwait(false);
-        _logger.LogInformation("Sysmon instalado (exit {Code})", r.ExitCode);
-        return r.ExitCode == 0 ? "Sysmon instalado con la configuración de SwiftOnSecurity." : $"Sysmon devolvió código {r.ExitCode}: {r.StdErr}";
     }
 
     /// <summary>Lee creación de procesos (evento 1) de los últimos días como historial previo.</summary>

@@ -62,6 +62,7 @@ public sealed class ActionService
                 "quarantine" => Quarantine(req, snapshot),
                 "remove_exclusion" => RemoveExclusion(req, snapshot),
                 "restore_hosts" => RestoreHosts(),
+                "repair_app" => RepairApp(req, snapshot),
                 "restore_proxy" => RestoreProxy(),
                 "restore_browser" => RestoreBrowser(req, snapshot),
                 "remove_extension" => RemoveExtension(req, snapshot),
@@ -155,7 +156,7 @@ public sealed class ActionService
             {
                 using var k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", writable: true)!;
                 var prev = k.GetValue(item.Name)?.ToString();
-                var def = item.Name switch { "Userinit" => @"C:\Windows\system32\userinit.exe,", "Shell" => "explorer.exe", _ => null };
+                var def = item.Name switch { "Userinit" => Path.Combine(PathClassifier.System32Dir, "userinit.exe") + ",", "Shell" => "explorer.exe", _ => null };
                 if (def is null) k.DeleteValue(item.Name, false); else k.SetValue(item.Name, def);
                 return Record("registry_value", item.Key, $"Restauramos el valor de Windows \"{item.Name}\".",
                     new RegistryBackup(@"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", item.Name, prev, "String"));
@@ -190,24 +191,45 @@ public sealed class ActionService
         var scope = new ManagementScope(@"\\.\root\subscription");
         scope.Connect();
         var cls = item.Extra.GetValueOrDefault("consumerClass") ?? "CommandLineEventConsumer";
+        // El nombre lo eligió quien creó la tarea: nunca se mete en el texto de una consulta. Se recorren las instancias de
+        // la clase y se compara el nombre exacto acá, para borrar sólo esa tarea y nada más.
+        if (!System.Text.RegularExpressions.Regex.IsMatch(cls, "^[A-Za-z_][A-Za-z0-9_]*$"))
+            return new ActionResult { Message = "Tipo de tarea WMI desconocido: quitala a mano." };
         var mofParts = new List<string>();
-        void DeleteWhere(string query)
+        void DeleteMatching(string className, Func<ManagementObject, bool> match)
         {
-            using var searcher = new ManagementObjectSearcher(scope, new ObjectQuery(query));
-            foreach (ManagementObject mo in searcher.Get())
+            using var mgmtClass = new ManagementClass(scope, new ManagementPath(className), null);
+            foreach (ManagementObject mo in mgmtClass.GetInstances())
             {
                 using (mo)
                 {
+                    if (!match(mo)) continue;
                     mofParts.Add(mo.GetText(TextFormat.Mof));
                     mo.Delete();
                 }
             }
         }
-        var name = item.Name.Replace("'", "\\'");
-        DeleteWhere($"SELECT * FROM __FilterToConsumerBinding WHERE Consumer = '{cls}.Name=\"{name}\"'");
-        DeleteWhere($"SELECT * FROM {cls} WHERE Name = '{name}'");
+        static string? Prop(ManagementObject mo, string name) { try { return mo[name]?.ToString(); } catch { return null; } }
+        static string? RelName(string? path)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            try { var mp = new ManagementPath(path); return $"{mp.ClassName}|{mp.RelativePath}"; } catch { return null; }
+        }
+
+        bool IsTarget(ManagementObject mo) => string.Equals(Prop(mo, "Name"), item.Name, StringComparison.Ordinal);
+        string? consumerRel = null;
+        using (var consumers = new ManagementClass(scope, new ManagementPath(cls), null))
+            foreach (ManagementObject mo in consumers.GetInstances())
+                using (mo)
+                    if (IsTarget(mo)) consumerRel = RelName(mo.Path.Path);
+        if (consumerRel is null) return new ActionResult { Message = "No encontramos esa tarea WMI (puede que ya no exista)." };
+        // Orden: vínculo, consumidor, filtro (al deshacer se recrean al revés).
+        DeleteMatching("__FilterToConsumerBinding", mo => RelName(Prop(mo, "Consumer")) == consumerRel);
+        DeleteMatching(cls, IsTarget);
         var filter = item.Extra.GetValueOrDefault("filter");
-        if (!string.IsNullOrEmpty(filter)) DeleteWhere($"SELECT * FROM __EventFilter WHERE Name = '{filter.Replace("'", "\\'")}'");
+        if (!string.IsNullOrEmpty(filter))
+            DeleteMatching("__EventFilter", mo => string.Equals(Prop(mo, "Name"), filter, StringComparison.Ordinal));
+        if (mofParts.Count == 0) return new ActionResult { Message = "No encontramos esa tarea WMI (puede que ya no exista)." };
         var mofFile = Path.Combine(DemiurgePaths.Backups, $"wmi_{Guid.NewGuid():N}.mof");
         File.WriteAllText(mofFile, "#pragma namespace(\"\\\\\\\\.\\\\root\\\\subscription\")\n" + string.Join("\n", mofParts.AsEnumerable().Reverse()));
         return Record("wmi", item.Key, $"Eliminamos la tarea WMI \"{item.Name}\" (guardamos una copia).", new FileMoveBackup("", mofFile));
@@ -218,21 +240,13 @@ public sealed class ActionService
     private ActionResult KillProcess(ActionRequest req, ScanSnapshot s)
     {
         var targets = s.Processes.Where(p => p.EndTime is null && (p.Key == req.EntityKey || p.BinaryKey == req.EntityKey)).ToList();
+        var blocked = targets.FirstOrDefault(p => IsProtectedProcess(p, s));
+        if (blocked is not null)
+            return new ActionResult { Message = $"\"{blocked.Name}\" es una parte esencial de Windows: cerrarla apaga o cuelga la PC. No la finalizamos; si sospechás de ella, revisá la tarjeta o pedí ayuda." };
         int killed = 0;
         foreach (var p in targets)
         {
-            try
-            {
-                using var proc = Process.GetProcessById(p.Pid);
-                // Evitar matar otro proceso que reutilizó el PID.
-                if (p.StartTime is not null && Math.Abs((proc.StartTime - p.StartTime.Value.LocalDateTime).TotalSeconds) > 2) continue;
-                proc.Kill(entireProcessTree: false);
-                killed++;
-            }
-            catch (ArgumentException)
-            {
-                // ya terminó
-            }
+            if (TryKill(p)) killed++;
         }
         if (killed == 0) return new ActionResult { Message = "El programa ya no estaba en ejecución." };
         return Record("kill", req.EntityKey, $"Finalizamos {killed} proceso(s). Si el programa arranca solo, también conviene deshabilitar su arranque.", new { pids = targets.Select(t => t.Pid) }, reversible: false);
@@ -242,11 +256,13 @@ public sealed class ActionService
     {
         var bin = s.GetBinary(req.EntityKey) ?? s.Binaries.Values.FirstOrDefault(b => s.Persistence.Any(p => p.Key == req.EntityKey && p.BinaryKey == b.Key));
         if (bin is null || !File.Exists(bin.Path)) return new ActionResult { Message = "No encontramos el archivo." };
-        if (PathClassifier.IsSystem32(bin.Path) && bin.Signature?.IsMicrosoft == true)
-            return new ActionResult { Message = "Es un archivo de Windows firmado por Microsoft: no lo movemos a cuarentena." };
+        // Nada de la carpeta de Windows, nada firmado por Microsoft (esté donde esté) y nada de Demiurge: un falso
+        // positivo ahí rompería Windows. Esos casos se revisan a mano.
+        if (PathClassifier.IsInWindowsDir(bin.Path) || bin.Signature?.IsMicrosoft == true || IsUnder(bin.Path, AppContext.BaseDirectory))
+            return new ActionResult { Message = "Es un archivo de Windows o firmado por Microsoft: no lo movemos a cuarentena porque podría dejar de funcionar la PC." };
 
         foreach (var p in s.Processes.Where(p => p.BinaryKey == bin.Key && p.EndTime is null))
-            try { using var proc = Process.GetProcessById(p.Pid); proc.Kill(); proc.WaitForExit(5000); } catch { }
+            TryKill(p, waitMs: 5000);
 
         var dest = Path.Combine(DemiurgePaths.Quarantine, $"{bin.Sha256 ?? Guid.NewGuid().ToString("N")}.quarantine");
         // Ofuscamos con XOR para que no se pueda ejecutar ni dispare el AV desde la cuarentena. Se verifica que el
@@ -302,6 +318,18 @@ public sealed class ActionService
         return Record("file_copy", "hosts", "Restauramos el archivo hosts a su estado original (guardamos una copia).", new FileMoveBackup(hosts, backup));
     }
 
+    /// <summary>Vuelve el index.js de Discord a su única línea original (guarda una copia del modificado).</summary>
+    private ActionResult RepairApp(ActionRequest req, ScanSnapshot s)
+    {
+        var app = s.AppIntegrity.FirstOrDefault(a => a.Key == req.EntityKey && a.Status == "modified");
+        if (app is null) return new ActionResult { Message = "No encontramos esa aplicación modificada." };
+        var backup = Path.Combine(DemiurgePaths.Backups, $"{Guid.NewGuid():N}_index.js");
+        SafeFile.CopyOut(app.Path, backup);
+        SafeFile.WriteAllText(app.Path, Collectors.AppIntegrityCollector.DiscordOriginalIndex);
+        return Record("file_copy", app.Key, $"Reparamos {app.App}: el archivo volvió a su estado original (guardamos una copia del modificado). Cerrá y abrí {app.App}, y cambiá tu contraseña.",
+            new FileMoveBackup(app.Path, backup));
+    }
+
     private ActionResult RestoreProxy()
     {
         var saved = new List<RegistryBackup>();
@@ -329,7 +357,7 @@ public sealed class ActionService
 
     private static string RunNetsh(string args)
     {
-        var psi = new ProcessStartInfo("netsh", args) { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+        var psi = new ProcessStartInfo(Path.Combine(PathClassifier.System32Dir, "netsh.exe"), args) { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
         using var p = Process.Start(psi)!;
         var o = p.StandardOutput.ReadToEnd();
         p.WaitForExit(10000);
@@ -551,8 +579,7 @@ public sealed class ActionService
                     var b = Deserialize<FileMoveBackup>(rec.Backup);
                     if (Directory.Exists(b.Backup))
                     {
-                        SafeFile.VerifyDirectory(Path.GetDirectoryName(b.Original)!);
-                        Directory.Move(b.Backup, b.Original);
+                        SafeFile.RestoreDirectory(b.Backup, b.Original);
                     }
                     else
                     {
@@ -575,8 +602,7 @@ public sealed class ActionService
                     {
                         if (Directory.Exists(b.Backup))
                         {
-                            SafeFile.VerifyDirectory(Path.GetDirectoryName(b.Original)!);
-                            Directory.Move(b.Backup, b.Original);
+                            SafeFile.RestoreDirectory(b.Backup, b.Original);
                         }
                         else SafeFile.RestoreTo(b.Backup, b.Original);
                     }
@@ -661,6 +687,50 @@ public sealed class ActionService
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /// <summary>Procesos que no se finalizan nunca: el kernel, los críticos de Windows (cerrarlos es pantalla azul) y Demiurge.</summary>
+    private static readonly HashSet<string> CriticalProcessNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "System", "Registry", "Idle", "smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe", "services.exe", "lsass.exe",
+        "lsaiso.exe", "svchost.exe", "dwm.exe", "fontdrvhost.exe", "MsMpEng.exe", "NisSrv.exe", "MemCompression", "explorer.exe",
+    };
+
+    internal static bool IsProtectedProcess(ProcessInfo p, ScanSnapshot s)
+    {
+        if (p.Pid is 0 or 4 || p.Pid == Environment.ProcessId) return true;
+        var path = p.Path;
+        // Un "svchost.exe" en AppData es justamente lo sospechoso: el nombre protege sólo si está en la carpeta de Windows.
+        if (CriticalProcessNames.Contains(p.Name) && (path is null || PathClassifier.IsInWindowsDir(path))) return true;
+        return path is not null && PathClassifier.IsInWindowsDir(path) && s.GetBinary(p.BinaryKey)?.Signature?.IsMicrosoft == true;
+    }
+
+    /// <summary>Finaliza un proceso sólo si sigue siendo el mismo que se escaneó (el PID se reutiliza).</summary>
+    private static bool TryKill(ProcessInfo p, int waitMs = 0)
+    {
+        try
+        {
+            using var proc = Process.GetProcessById(p.Pid);
+            if (p.StartTime is null || Math.Abs((proc.StartTime - p.StartTime.Value.LocalDateTime).TotalSeconds) > 2) return false;
+            proc.Kill(entireProcessTree: false);
+            if (waitMs > 0) proc.WaitForExit(waitMs);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return false; // ya terminó o no se puede abrir
+        }
+    }
+
+    private static bool IsUnder(string path, string dir)
+    {
+        try
+        {
+            var full = Path.GetFullPath(path);
+            var baseDir = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            return full.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
 
     private static byte[] Xor(byte[] data)
     {

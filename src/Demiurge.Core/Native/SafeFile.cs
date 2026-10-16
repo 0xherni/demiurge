@@ -128,10 +128,146 @@ public static class SafeFile
             fs.Write(data);
             return;
         }
-        // No existe: verificar que la carpeta padre no esté redirigida y crear con CreateNew (falla si alguien lo creó en el medio).
-        VerifyDirectory(Path.GetDirectoryName(originalPath)!);
-        using var created = new FileStream(originalPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        created.Write(data);
+        // No existe: se abre la carpeta padre, se verifica que sea la real (sin enlaces) y el archivo se crea RELATIVO a ese
+        // handle. Verificar la ruta y después crear por ruta deja un instante en el que la carpeta se puede cambiar por un
+        // enlace; con el handle, cambiar la ruta ya no afecta adónde se escribe.
+        var full = Path.GetFullPath(originalPath);
+        using var parent = OpenVerifiedDirectory(Path.GetDirectoryName(full)!, GENERIC_READ | FILE_ADD_FILE);
+        using var created = CreateRelative(parent, Path.GetFileName(full));
+        using var output = new FileStream(created, FileAccess.Write);
+        output.Write(data);
+    }
+
+    /// <summary>
+    /// Devuelve una carpeta respaldada (en la carpeta protegida de Demiurge) a su lugar original, con un rename relativo a
+    /// la carpeta padre ya verificada (mismo motivo que <see cref="RestoreTo"/>).
+    /// </summary>
+    public static void RestoreDirectory(string backupDir, string originalPath)
+    {
+        if (IntPtr.Size != 8) throw new PlatformNotSupportedException("Sólo Windows de 64 bits.");
+        var full = Path.GetFullPath(originalPath);
+        var name = Path.GetFileName(full);
+        ValidateLeafName(name);
+        using var parent = OpenVerifiedDirectory(Path.GetDirectoryName(full)!, GENERIC_READ | FILE_ADD_SUBDIRECTORY);
+        using var src = CreateFileW(backupDir, DELETE | SYNCHRONIZE, FILE_SHARE_READ | 2 | 4, IntPtr.Zero, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, IntPtr.Zero);
+        if (src.IsInvalid) throw new IOException($"No se pudo abrir {backupDir}: {Marshal.GetLastPInvokeErrorMessage()}");
+        if (!GetFileInformationByHandle(src, out var info) || (info.Attributes & 0x10) == 0 || (info.Attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+            throw new SecurityException("El respaldo no es una carpeta común; se cancela la restauración.");
+
+        // FILE_RENAME_INFORMATION (x64): Flags/ReplaceIfExists @0, RootDirectory @8, FileNameLength @16, FileName @20.
+        int size = 20 + (name.Length + 1) * 2;
+        var buf = Marshal.AllocHGlobal(size);
+        bool added = false;
+        try
+        {
+            for (int i = 0; i < size; i++) Marshal.WriteByte(buf, i, 0);
+            parent.DangerousAddRef(ref added);
+            Marshal.WriteIntPtr(buf, 8, parent.DangerousGetHandle());
+            Marshal.WriteInt32(buf, 16, name.Length * 2);
+            Marshal.Copy(name.ToCharArray(), 0, buf + 20, name.Length);
+            int status = NtSetInformationFile(src, out _, buf, (uint)size, FileRenameInformation);
+            if (status < 0) throw new IOException("No se pudo restaurar la carpeta: " + new System.ComponentModel.Win32Exception((int)RtlNtStatusToDosError(status)).Message);
+        }
+        finally
+        {
+            if (added) parent.DangerousRelease();
+            Marshal.FreeHGlobal(buf);
+        }
+    }
+
+    private const uint SYNCHRONIZE = 0x00100000;
+    private const uint FILE_ADD_FILE = 0x0002;
+    private const uint FILE_ADD_SUBDIRECTORY = 0x0004;
+    private const int FileRenameInformation = 10;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UNICODE_STRING { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct OBJECT_ATTRIBUTES
+    {
+        public int Length;
+        public IntPtr RootDirectory;
+        public IntPtr ObjectName;
+        public uint Attributes;
+        public IntPtr SecurityDescriptor;
+        public IntPtr SecurityQualityOfService;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IO_STATUS_BLOCK { public IntPtr Status; public IntPtr Information; }
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtCreateFile(out SafeFileHandle handle, uint access, ref OBJECT_ATTRIBUTES oa, out IO_STATUS_BLOCK iosb,
+        IntPtr allocationSize, uint fileAttributes, uint share, uint disposition, uint options, IntPtr eaBuffer, uint eaLength);
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtSetInformationFile(SafeFileHandle handle, out IO_STATUS_BLOCK iosb, IntPtr info, uint length, int infoClass);
+
+    [DllImport("ntdll.dll")]
+    private static extern uint RtlNtStatusToDosError(int status);
+
+    /// <summary>Abre una carpeta y verifica (por el handle) que no sea un enlace y que su ruta real sea la esperada.</summary>
+    private static SafeFileHandle OpenVerifiedDirectory(string dir, uint access)
+    {
+        var h = CreateFileW(dir, access, FILE_SHARE_READ | 2 | 4, IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, IntPtr.Zero);
+        if (h.IsInvalid) throw new IOException($"No se pudo abrir {dir}: {Marshal.GetLastPInvokeErrorMessage()}");
+        try
+        {
+            if (!GetFileInformationByHandle(h, out var info) || (info.Attributes & 0x10) == 0)
+                throw new IOException($"{dir} no es una carpeta.");
+            if ((info.Attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+                throw new SecurityException($"{dir} es un enlace a otra carpeta; por seguridad se cancela la acción.");
+            CheckFinalPath(h, dir);
+            return h;
+        }
+        catch
+        {
+            h.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Crea un archivo NUEVO dentro de la carpeta del handle (falla si ya existe algo con ese nombre, incluso un enlace).</summary>
+    private static SafeFileHandle CreateRelative(SafeFileHandle parent, string name)
+    {
+        ValidateLeafName(name);
+        var namePtr = Marshal.StringToHGlobalUni(name);
+        var usPtr = Marshal.AllocHGlobal(Marshal.SizeOf<UNICODE_STRING>());
+        bool added = false;
+        try
+        {
+            Marshal.StructureToPtr(new UNICODE_STRING { Length = (ushort)(name.Length * 2), MaximumLength = (ushort)(name.Length * 2 + 2), Buffer = namePtr }, usPtr, false);
+            parent.DangerousAddRef(ref added);
+            var oa = new OBJECT_ATTRIBUTES
+            {
+                Length = Marshal.SizeOf<OBJECT_ATTRIBUTES>(),
+                RootDirectory = parent.DangerousGetHandle(),
+                ObjectName = usPtr,
+                Attributes = 0x40, // OBJ_CASE_INSENSITIVE
+            };
+            int status = NtCreateFile(out var h, GENERIC_WRITE | SYNCHRONIZE, ref oa, out _, IntPtr.Zero, 0x80 /*NORMAL*/, 0,
+                2 /*FILE_CREATE*/, 0x40 | 0x20 /*NON_DIRECTORY_FILE | SYNCHRONOUS_IO_NONALERT*/, IntPtr.Zero, 0);
+            if (status < 0)
+            {
+                h.Dispose();
+                throw new IOException("No se pudo crear el archivo: " + new System.ComponentModel.Win32Exception((int)RtlNtStatusToDosError(status)).Message);
+            }
+            return h;
+        }
+        finally
+        {
+            if (added) parent.DangerousRelease();
+            Marshal.FreeHGlobal(usPtr);
+            Marshal.FreeHGlobal(namePtr);
+        }
+    }
+
+    private static void ValidateLeafName(string name)
+    {
+        if (string.IsNullOrEmpty(name) || name is "." or ".." || name.IndexOfAny(['\\', '/', ':']) >= 0)
+            throw new SecurityException($"Nombre de archivo inválido: {name}");
     }
 
     /// <summary>Verifica que una carpeta no sea (ni cuelgue de) un junction/symlink que redirija a otro lado.</summary>

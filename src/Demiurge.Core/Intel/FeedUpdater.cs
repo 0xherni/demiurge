@@ -58,6 +58,25 @@ public sealed class FeedUpdater
         return changed;
     }
 
+    /// <summary>Tope por feed: una respuesta gigante (servidor comprometido o error) no puede llenar el disco ni la memoria.</summary>
+    private const long MaxFeedBytes = 512L * 1024 * 1024;
+
+    internal static async Task CopyLimitedAsync(Stream source, Stream destination, long maxBytes, CancellationToken ct)
+    {
+        await using (source)
+        {
+            var buffer = new byte[81920];
+            long total = 0;
+            int read;
+            while ((read = await source.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+            {
+                total += read;
+                if (total > maxBytes) throw new InvalidDataException($"La descarga supera el máximo permitido ({maxBytes / (1024 * 1024)} MB).");
+                await destination.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+            }
+        }
+    }
+
     private async Task<bool> DownloadAsync(Feed feed, string target, CancellationToken ct)
     {
         var tmp = target + ".download";
@@ -69,7 +88,7 @@ public sealed class FeedUpdater
             using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
             await using (var fs = File.Create(tmp))
-                await resp.Content.CopyToAsync(fs, ct).ConfigureAwait(false);
+                await CopyLimitedAsync(await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false), fs, MaxFeedBytes, ct).ConfigureAwait(false);
 
             feed.Validate(tmp);
             File.Move(tmp, target, overwrite: true);
@@ -92,7 +111,7 @@ public sealed class FeedUpdater
         {
             var cab = Path.Combine(work, "authrootstl.cab");
             await using (var fs = File.Create(cab))
-                await (await _http.GetStreamAsync(url, ct).ConfigureAwait(false)).CopyToAsync(fs, ct).ConfigureAwait(false);
+                await CopyLimitedAsync(await _http.GetStreamAsync(url, ct).ConfigureAwait(false), fs, 32L * 1024 * 1024, ct).ConfigureAwait(false);
 
             // expand.exe a veces nombra la salida como el CAB: extraemos a una carpeta propia y tomamos lo que salga.
             var outDir = DemiurgePaths.Ensure(Path.Combine(work, "out"));

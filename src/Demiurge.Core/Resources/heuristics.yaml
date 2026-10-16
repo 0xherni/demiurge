@@ -15,7 +15,7 @@ scoring:
   accumulation_bonus: 0.20
   accumulation_min_categories: 3
   hard_allowlist_ignores: [H-03, H-04, H-14]
-  never_ignore: [H-01, H-02, H-26, H-27, H-32, H-33, H-36]
+  never_ignore: [H-01, H-02, H-26, H-27, H-32, H-33, H-36, H-39, H-40]
 
 heuristics:
   - id: H-01
@@ -558,3 +558,79 @@ heuristics:
     phase: v2
     template: 'Hay una regla en el firewall ("{regla}") que deja que "{nombre}", un programa sin firma instalado en una carpeta de usuario, reciba conexiones desde afuera ({puertos}). Los programas que controlan una PC a distancia se agregan reglas así.'
     action: Si no reconocés el programa, desactivá la regla (Firewall de Windows → Configuración avanzada → Reglas de entrada).
+
+  - id: H-38
+    name: Comando pegado que descarga y ejecuta algo (estafa "ClickFix")
+    # Base 45 en Win+R / Explorador (nadie escribe eso ahí por accidente), 25 en el historial de PowerShell (los
+    # programadores instalan herramientas así). La respuesta del usuario manda, salvo que haya una marca de estafa.
+    weight: 45
+    severity: Alta
+    attack: [T1204.004, T1059.001]
+    category: execution
+    phase: v2
+    template: 'Se escribió o pegó un comando en {donde} (usuario {usuario}): "{comando}". {que_hace} Así funciona una estafa muy común: una página falsa te pide que lo pegues "para verificar que sos humano" o "para arreglar un error", y en realidad instala un programa que roba contraseñas.'
+    action: 'Si una página o alguien te pidió pegarlo: cambiá ya tus contraseñas importantes (mail, banco, redes) desde otro dispositivo, cerrá las sesiones abiertas y revisá el resto de los hallazgos. Ninguna página legítima te pide pegar comandos.'
+    question:
+      id: pasted_command
+      text: '¿Pegaste este comando porque una página, un mensaje o una persona te lo pidió? (por ejemplo, para "verificar que sos humano" o "arreglar un error")'
+      options:
+        - { value: page, label: 'Sí, me lo pidieron', weight: 90 }
+        - { value: 'no', label: 'No, lo escribí yo y sé lo que hace', weight: 0 }
+        - { value: unknown, label: 'No me acuerdo', weight: 50 }
+    params:
+      run_weight: 45
+      powershell_weight: 25
+      long_weight: 30
+      decoy_weight: 80
+      decoy_min_weight: 40
+      feed_weight: 90
+      long_command_min: 60
+      # Descarga + ejecución en un solo comando (o código escondido en base64).
+      download_exec:
+        - '(iwr|irm|invoke-webrequest|invoke-restmethod|downloadstring|net\.webclient)[^|]*\|\s*(iex|invoke-expression)'
+        - '\b(iex|invoke-expression)\b\s*\(*\s*(new-object|iwr|irm|invoke-webrequest|invoke-restmethod|\[)'
+        - '\s-e(nc|ncodedcommand)?\s+[a-z0-9+/=]{40,}'
+        - 'frombase64string'
+        - '\bmshta(\.exe)?\s+["'']?(https?:|\\\\)'
+        - '\bcurl(\.exe)?\b[^|&]*https?:[^|&]*(\||&&?)\s*(cmd|powershell|pwsh|iex)'
+        - '\bcurl(\.exe)?\b.*\s-(o|output)\s+\S+.*(&|;)\s*(start|call|\S+\.(exe|bat|cmd|vbs|js|ps1)\b)'
+        - '\bcertutil(\.exe)?\b.*-urlcache'
+        - '\bbitsadmin(\.exe)?\b.*/transfer'
+        - '\bmsiexec(\.exe)?\b.*https?:'
+        - '\b(rundll32|regsvr32)(\.exe)?\b.*(https?:|\\\\[^\\\s]+@)'
+        - '\bconhost(\.exe)?\b.*--headless'
+        - '\bfinger(\.exe)?\s+\S+@\S+.*\|'
+        - '\s-w(in(dow)?(style)?)?\s+(h(idden)?|1)\b.*(https?:|\biex\b|invoke-expression)'
+      # Comentario "señuelo" al final para que el comando parezca una verificación inocente.
+      decoy:
+        - '(#|::|\brem\b).*(robot|captcha|verif|human|humano|cloudflare|ray\s*id|i am not|no soy)'
+        - '\s{30,}(#|::)'
+      # Herramientas que no se escriben "largas" en Win+R salvo que se copien de algún lado.
+      launchers: [powershell, pwsh, cmd, mshta, conhost, wscript, cscript, rundll32, regsvr32, msiexec, certutil, bitsadmin, curl, finger]
+      # Instaladores oficiales que usan "irm ... | iex" (sólo si TODAS las direcciones del comando son de esta lista).
+      # Nunca hosts compartidos (raw.githubusercontent.com, github.com, pastebin): cualquiera sube cosas ahí.
+      # get.activated.win / massgrave.dev: script de activación MAS; no es malware (calibración 14/10/2026). Sólo el dominio exacto:
+      # hay copias falsas con nombres parecidos que sí distribuyen malware.
+      trusted_hosts: [get.scoop.sh, scoop.sh, astral.sh, bun.sh, deno.land, chocolatey.org, christitus.com, ohmyposh.dev, pnpm.io, aka.ms, dot.net, microsoft.com, python-poetry.org, volta.sh, rustup.rs, claude.ai, anthropic.com, ollama.com, starship.rs, pixi.sh, get.activated.win, massgrave.dev]
+
+  - id: H-39
+    name: Aplicación modificada por un ladrón de cuentas
+    weight: 70
+    severity: Critica
+    attack: [T1554, T1539]
+    category: tamper
+    phase: v2
+    template: 'El archivo de arranque de {app} (usuario {usuario}) fue modificado: tiene {senales}. Un {app} limpio no trae ese código. Así trabajan los ladrones de cuentas: cada vez que abrís la aplicación, le roban la sesión y se la mandan a otra persona, aunque el virus original ya no esté.'
+    action: 'Usá "Reparar Discord" para volver el archivo a su estado original, cerrá Discord por completo (también desde el área de notificaciones) y volvé a abrirlo. Después cambiá la contraseña de Discord: eso cierra las sesiones robadas. Activá la verificación en dos pasos.'
+    params:
+      exfil_weight: 90
+
+  - id: H-40
+    name: Malware conocido que se ejecutó y se borró
+    weight: 100
+    severity: Critica
+    attack: [T1070.004, T1555]
+    category: reputation
+    phase: v2
+    template: '"{nombre}" se ejecutó en esta PC desde {carpeta} ({fecha}) y ya no está, pero Windows guardó su huella: coincide con {familia}, un programa malicioso conocido. Aunque se haya borrado, pudo haberse llevado contraseñas o sesiones abiertas.'
+    action: 'Cambiá tus contraseñas importantes desde otro dispositivo (empezando por el mail), cerrá las sesiones abiertas en todos los servicios y revisá el resto de los hallazgos por si dejó algo instalado.'

@@ -59,6 +59,8 @@ public enum EntityKind
     Driver,
     Execution,
     FirewallRule,
+    TypedCommand,
+    AppIntegrity,
 }
 
 public enum PersistenceType

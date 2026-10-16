@@ -71,6 +71,8 @@ public sealed class ScanOrchestrator
         new RecentFilesCollector(),             // COL-25
         new ExecutionHistoryCollector(),        // COL-27
         new FirewallCollector(),                // COL-28
+        new TypedCommandCollector(),            // COL-29
+        new AppIntegrityCollector(),            // COL-30
         new ResourceCollector(),                // COL-26
     ];
 
@@ -104,6 +106,7 @@ public sealed class ScanOrchestrator
                 Progress = progress,
             };
             await new CollectorRunner(CreateCollectors()).RunAsync(ctx, ct).ConfigureAwait(false);
+            DistrustLocalRoots(snapshot, _feeds.AuthRootThumbprints);
 
             if (_options.SysmonOptIn)
             {
@@ -132,6 +135,25 @@ public sealed class ScanOrchestrator
         finally
         {
             _scanLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Una firma cuya cadena termina en un certificado raíz que no es público (no está en la lista de Microsoft de raíces
+    /// de confianza) ni de Microsoft, se agregó en esta PC: Windows la da por válida, pero no la emitió nadie verificable.
+    /// Es la forma de que un malware "se firme" solo. Esas firmas no cuentan como válidas. Sin la lista (sin internet
+    /// todavía) no se puede distinguir y no se toca nada.
+    /// </summary>
+    internal static void DistrustLocalRoots(ScanSnapshot snapshot, IReadOnlySet<string> authRoot)
+    {
+        if (authRoot.Count == 0) return;
+        foreach (var b in snapshot.Binaries.Values)
+        {
+            var sig = b.Signature;
+            if (sig is not { IsValid: true, RootThumbprint: { } root }) continue;
+            if (authRoot.Contains(root) || SignatureInfo.MicrosoftRoots.Contains(root)) continue;
+            sig.IsValid = false;
+            sig.Error = "Firmado con un certificado raíz que no es de confianza pública (se agregó en esta PC)";
         }
     }
 

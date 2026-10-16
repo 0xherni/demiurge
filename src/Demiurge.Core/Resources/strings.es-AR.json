@@ -91,6 +91,7 @@
   "action.remove_certificate": "Quitar el certificado (se guarda una copia)",
   "action.remove_wmi": "Eliminar la tarea WMI (se guarda una copia)",
   "action.remove_ifeo": "Restaurar la función de Windows",
+  "action.repair_app": "Reparar la aplicación (se guarda una copia)",
   "action.allowlist": "Lo reconozco (no volver a mostrar)",
 
   "health.buena": "Protección: buena",

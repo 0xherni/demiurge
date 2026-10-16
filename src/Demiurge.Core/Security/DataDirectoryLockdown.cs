@@ -1,6 +1,7 @@
 using System.Security.AccessControl;
 using System.Security.Principal;
 using Demiurge.Core.Native;
+using Demiurge.Core.Util;
 using Microsoft.Extensions.Logging;
 
 namespace Demiurge.Core.Security;
@@ -51,21 +52,15 @@ public static class DataDirectoryLockdown
     {
         if (!ProcessNative.IsAdministrator())
         {
+            DemiurgePaths.Secured = true;
             logger.LogWarning("Sin privilegios: no se puede proteger {Root}. Abrí Demiurge como administrador para que los datos queden protegidos.", root);
             return;
         }
 
-        Directory.CreateDirectory(root);
-        var dir = new DirectoryInfo(root);
-
-        // Si la carpeta raíz la creó otro usuario antes de instalar ("squatting"), tomamos posesión primero.
-        var rootSec = dir.GetAccessControl();
-        if (!IsTrustedOwner(rootSec.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier))
-        {
-            logger.LogWarning("{Root} tenía un dueño no confiable: se toma posesión", root);
-            rootSec.SetOwner(Admins);
-            dir.SetAccessControl(rootSec);
-        }
+        // Todo lo que cree la app de acá en adelante (base, log, feeds) queda a nombre de Administradores; si no, quedaría a
+        // nombre del usuario y en el próximo arranque se tomaría como plantado por otro programa.
+        if (!ProcessNative.SetDefaultOwnerToAdministrators())
+            logger.LogWarning("No se pudo fijar Administradores como dueño de los archivos nuevos");
 
         var sec = new DirectorySecurity();
         sec.SetOwner(Admins);
@@ -73,7 +68,30 @@ public static class DataDirectoryLockdown
         foreach (var sid in new[] { System, Admins })
             sec.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl,
                 InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-        dir.SetAccessControl(sec);
+
+        // Cualquier usuario puede crear carpetas en C:\ProgramData. Si "Demiurge" ya existe y es un enlace (junction a
+        // C:\Windows, por ejemplo) o la creó otro usuario, NUNCA se toca su contenido ni sus permisos (se aplicarían al
+        // destino del enlace): se la aparta renombrándola y se crea una nueva, ya protegida desde el momento de crearla.
+        var notes = new List<string>();
+        var aside = SetAsideIfUnsafe(root, path => IsTrustedOwner(OwnerOf(path)), notes);
+        var dir = new DirectoryInfo(root);
+        if (!dir.Exists)
+        {
+            try { dir.Create(sec); }
+            catch (IOException) when (Directory.Exists(root) || File.Exists(root))
+            {
+                // Alguien la volvió a crear justo en el medio: no se sigue con una carpeta que no creamos nosotros.
+                throw new InvalidOperationException($"La carpeta de datos ({root}) está siendo manipulada por otro programa. Reiniciá la PC y volvé a abrir Demiurge.");
+            }
+        }
+        else
+        {
+            dir.SetAccessControl(sec);
+        }
+        // Recién ahora (carpeta propia y protegida) se puede escribir el log, incluido lo que pasó hasta acá.
+        DemiurgePaths.Secured = true;
+        foreach (var n in notes) logger.LogWarning("{Note}", n);
+        if (aside is not null) logger.LogWarning("La carpeta de datos anterior no era confiable: se apartó a {Aside}", aside);
 
         // Revisar lo que ya existía: lo que no creó SYSTEM/Administradores se aparta.
         var untrusted = Path.Combine(root, "untrusted");
@@ -110,6 +128,36 @@ public static class DataDirectoryLockdown
             }
         }
         logger.LogInformation("Carpeta de datos protegida ({Root}); {Moved} elemento(s) no confiables apartados", root, moved);
+    }
+
+    /// <summary>
+    /// Si <paramref name="root"/> existe y es un enlace (junction/symlink), un archivo, o su dueño no es confiable, la
+    /// renombra (renombrar mueve el enlace en sí, nunca su destino) y devuelve a dónde la movió. Si no hay nada que
+    /// apartar, devuelve null. Si no se puede apartar, falla: no se sigue con una carpeta ajena.
+    /// </summary>
+    internal static string? SetAsideIfUnsafe(string root, Func<string, bool> trustedOwner, List<string> notes)
+    {
+        FileAttributes attrs;
+        try { attrs = File.GetAttributes(root); } // no sigue enlaces: devuelve los atributos del enlace mismo
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return null; }
+
+        bool link = attrs.HasFlag(FileAttributes.ReparsePoint);
+        bool isDir = attrs.HasFlag(FileAttributes.Directory);
+        if (!link && isDir && trustedOwner(root)) return null;
+
+        notes.Add(link ? $"{root} era un enlace a otra carpeta: se aparta sin tocar su destino"
+            : !isDir ? $"{root} era un archivo, no una carpeta: se aparta"
+            : $"{root} la creó un usuario sin privilegios: se aparta");
+        var aside = $"{root}.untrusted-{DateTime.Now:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
+        try
+        {
+            if (isDir) Directory.Move(root, aside); else File.Move(root, aside);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"La carpeta de datos ({root}) no es confiable y no se pudo apartar ({ex.Message}). Reiniciá la PC y volvé a abrir Demiurge.", ex);
+        }
+        return aside;
     }
 
     /// <summary>

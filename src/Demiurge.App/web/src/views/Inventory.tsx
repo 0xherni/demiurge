@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { call } from "../bridge";
+import { Glossed } from "../components/Glossed";
 import { TONE, toneOfRow } from "../labels";
 import type { InventoryRow } from "../types";
 
 const TABS: [string, string][] = [
   ["startup", "Arranque"], ["processes", "Procesos"], ["connections", "Conexiones"], ["extensions", "Extensiones"],
   ["software", "Programas"], ["accounts", "Cuentas"], ["certificates", "Certificados"], ["drivers", "Controladores"],
-  ["files", "Archivos recientes"], ["history", "Historial"], ["logons", "Inicios de sesión"], ["firewall", "Firewall"], ["settings", "Configuración"],
+  ["files", "Archivos recientes"], ["history", "Historial"], ["logons", "Inicios de sesión"], ["firewall", "Firewall"], ["commands", "Comandos"], ["settings", "Configuración"],
 ];
 
 export function Inventory({ version }: { version: number }) {
@@ -56,8 +57,8 @@ export function Inventory({ version }: { version: number }) {
                   {r.path && <div className="rd mono selectable">{r.path}{r.signer ? `  ·  ${r.signer}` : ""}</div>}
                 </div>
                 <div className="ex">
-                  <span><b>¿Qué es?</b>{r.whatIsIt}</span>
-                  <span><b>¿Es normal?</b>{r.isItNormal}</span>
+                  <span><b>¿Qué es?</b><Glossed text={r.whatIsIt} max={1} /></span>
+                  <span><b>¿Es normal?</b><Glossed text={r.isItNormal} max={1} /></span>
                 </div>
               </div>
             );

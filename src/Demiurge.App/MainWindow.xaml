@@ -9,7 +9,8 @@
         Background="#110C0C">
     <Grid>
         <TextBlock x:Name="Loading" Text="Iniciando…" Foreground="#6E6260" FontSize="13"
-                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                   HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="560"
+                   TextAlignment="Center" />
         <wv2:WebView2 x:Name="Web" DefaultBackgroundColor="#110C0C" Visibility="Hidden" />
     </Grid>
 </Window>

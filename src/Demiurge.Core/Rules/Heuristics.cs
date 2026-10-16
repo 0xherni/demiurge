@@ -51,6 +51,9 @@ public static class Heuristics
             ["H-35"] = H35_RemoteLogon,
             ["H-36"] = H36_PasswordGuessing,
             ["H-37"] = H37_FirewallAllowsSuspicious,
+            ["H-38"] = H38_PastedCommand,
+            ["H-39"] = H39_TamperedApp,
+            ["H-40"] = H40_KnownMalwareExecuted,
         };
 
     /// <summary>Binarios "activos": los que se ejecutan, arrancan solos o están cargados (no sólo descargados).</summary>
@@ -878,13 +881,15 @@ public static class Heuristics
         var since = DateTimeOffset.Now.AddDays(-days);
         foreach (var x in ctx.Snapshot.Executions)
         {
-            if (x.Path is null || x.Exists != false || x.LastRun is null || x.LastRun < since) continue;
+            // Amcache sólo da la primera vez que se vio: sirve igual como fecha.
+            var when = x.LastRun ?? x.FirstRun;
+            if (x.Path is null || x.Exists != false || when is null || when < since) continue;
             var folder = PathClassifier.UserWritableFolder(x.Path);
             if (folder is null) continue;
             bool looksInstaller = installer.Any(r => r.IsMatch(x.Path));
             ctx.Emit(def, x, x.Key,
-                new() { ["nombre"] = x.Name, ["carpeta"] = folder, ["fecha"] = x.LastRun.Value.ToLocalTime().ToString("dd/MM/yyyy HH:mm") },
-                Raw(("path", x.Path), ("lastRun", x.LastRun?.ToString("O")), ("sources", x.Sources), ("installerLike", looksInstaller)),
+                new() { ["nombre"] = x.Name, ["carpeta"] = folder, ["fecha"] = when.Value.ToLocalTime().ToString("dd/MM/yyyy HH:mm") },
+                Raw(("path", x.Path), ("lastRun", x.LastRun?.ToString("O")), ("firstRun", x.FirstRun?.ToString("O")), ("sources", x.Sources), ("sha1", x.Sha1), ("installerLike", looksInstaller)),
                 looksInstaller ? def.Int("installer_weight", 10) : null);
         }
     }
@@ -967,6 +972,120 @@ public static class Heuristics
             ctx.Emit(def, r, b.Key,
                 new() { ["nombre"] = b.DisplayName, ["regla"] = r.Name, ["puertos"] = r.LocalPorts ?? "cualquier puerto" },
                 Raw(("rule", r.Name), ("app", r.App), ("ports", r.LocalPorts), ("protocol", r.Protocol), ("profiles", r.Profiles), ("store", r.Store), ("unsigned", unsigned), ("folder", folder)));
+        }
+    }
+
+    // ---------------------------------------------------------------- H-38
+    /// <summary>
+    /// Comando pegado en Ejecutar (Win+R), en la barra del Explorador o en PowerShell que descarga y ejecuta algo.
+    /// Es la estafa "ClickFix"/"FileFix": una página falsa ("verificá que sos humano") le pide a la persona que lo pegue.
+    /// Sólo la persona sabe si lo escribió a propósito, así que se pregunta.
+    /// </summary>
+    private static void H38_PastedCommand(RuleContext ctx, HeuristicDefinition def)
+    {
+        var downloadExec = def.List("download_exec");
+        var decoy = def.List("decoy");
+        var launchers = def.List("launchers");
+        var trusted = def.List("trusted_hosts");
+        int longMin = def.Int("long_command_min", 60);
+
+        foreach (var c in ctx.Snapshot.Commands)
+        {
+            var cmd = c.Command;
+            var pattern = downloadExec.FirstOrDefault(p => SafeMatch(p, cmd));
+            bool isDecoy = decoy.Any(p => SafeMatch(p, cmd));
+            var hosts = ExtractHosts(cmd);
+            var feedHit = hosts.Select(u => ctx.Feeds.MatchUrl(u.Url) ?? ctx.Feeds.MatchDomain(u.Host)).FirstOrDefault(h => h is not null);
+            bool typedBox = c.Source is "run" or "explorer";
+            var first = Path.GetFileNameWithoutExtension(cmd.TrimStart().TrimStart('"').Split(' ', '"')[0]).ToLowerInvariant();
+            bool longLauncher = typedBox && cmd.Length >= longMin && launchers.Contains(first);
+
+            if (pattern is null && !isDecoy && feedHit is null && !longLauncher) continue;
+            // Instaladores conocidos que se instalan con "irm ... | iex" (scoop, uv, bun...): sólo si todo apunta ahí.
+            if (!isDecoy && feedHit is null && hosts.Count > 0 && hosts.All(u => trusted.Any(t => u.Host.Equals(t, StringComparison.OrdinalIgnoreCase) || u.Host.EndsWith("." + t, StringComparison.OrdinalIgnoreCase))))
+                continue;
+
+            int weight = feedHit is not null ? def.Int("feed_weight", 90)
+                : isDecoy ? def.Int("decoy_weight", 80)
+                : pattern is not null ? (typedBox ? def.Int("run_weight", 45) : def.Int("powershell_weight", 25))
+                : def.Int("long_weight", 30);
+
+            string? answer = null;
+            if (def.Question is not null && ctx.Answers.TryGetValue($"{c.Key}|{def.Question.Id}", out var a))
+            {
+                answer = a.Answer;
+                var w = def.Question.Options.FirstOrDefault(o => o.Value == a.Answer)?.Weight;
+                // "Lo escribí yo" no borra la marca de la estafa (comentario señuelo o dirección maliciosa conocida).
+                if (w is not null) weight = answer == "no" && (isDecoy || feedHit is not null) ? Math.Max(w.Value, def.Int("decoy_min_weight", 40)) : w.Value;
+            }
+
+            var f = ctx.Emit(def, c, c.Key,
+                new()
+                {
+                    ["donde"] = c.Source switch { "run" => "la ventana Ejecutar (Win+R)", "explorer" => "la barra de direcciones del Explorador de archivos", _ => "PowerShell" },
+                    ["comando"] = Shorten(cmd),
+                    ["que_hace"] = isDecoy ? "Termina con un comentario escondido (\"no soy un robot\", \"verificación\") para parecer inofensivo: es la marca de la estafa."
+                        : feedHit is not null ? $"Se conecta a una dirección ya denunciada como maliciosa ({Describe(feedHit)})."
+                        : pattern is not null ? "Descarga algo de internet y lo ejecuta en el momento, sin que lo veas."
+                        : "Es un comando largo para una herramienta del sistema, típico de los que se copian de una página.",
+                    ["usuario"] = c.User ?? "?",
+                },
+                Raw(("source", c.Source), ("command", cmd), ("user", c.User), ("pattern", pattern), ("decoy", isDecoy), ("hosts", hosts.Select(u => u.Host).Distinct().ToList()),
+                    ("feed", feedHit?.Source), ("when", c.When?.ToString("O")), ("answer", answer)),
+                weight);
+            if (answer is not null) f.Question = null;
+        }
+    }
+
+    private static bool SafeMatch(string pattern, string input)
+    {
+        try { return Rx(pattern).IsMatch(input); }
+        catch (RegexMatchTimeoutException) { return false; }
+    }
+
+    /// <summary>URLs y dominios de un comando ("https://x/y" o "irm get.scoop.sh").</summary>
+    internal static List<(string Url, string Host)> ExtractHosts(string cmd)
+    {
+        var list = new List<(string, string)>();
+        foreach (Match m in Regex.Matches(cmd, @"https?://([a-z0-9.\-]+)[^\s'""|;)]*", RegexOptions.IgnoreCase))
+            list.Add((m.Value, m.Groups[1].Value.TrimEnd('.')));
+        foreach (Match m in Regex.Matches(cmd, @"\b(?:irm|iwr|curl|wget|invoke-restmethod|invoke-webrequest)(?:\.exe)?\s+(?:-\w+\s+)*['""]?(?!https?:)([a-z0-9-]+(?:\.[a-z0-9-]+)+)(/[^\s'""|;)]*)?", RegexOptions.IgnoreCase))
+            list.Add(("http://" + m.Groups[1].Value + m.Groups[2].Value, m.Groups[1].Value));
+        return list;
+    }
+
+    // ---------------------------------------------------------------- H-39
+    /// <summary>Aplicación modificada por un ladrón de cuentas (index.js de Discord con código agregado).</summary>
+    private static void H39_TamperedApp(RuleContext ctx, HeuristicDefinition def)
+    {
+        foreach (var a in ctx.Snapshot.AppIntegrity.Where(a => a.Status == "modified"))
+        {
+            bool exfil = a.Indicators.Any(i => i is "webhook de Discord" or "envía datos a internet" or "lee el token de la sesión");
+            ctx.Emit(def, a, a.Key,
+                new()
+                {
+                    ["app"] = a.App, ["usuario"] = a.User ?? "?",
+                    ["senales"] = a.Indicators.Count == 0 ? "código que no es de Discord" : string.Join(", ", a.Indicators),
+                },
+                Raw(("path", a.Path), ("user", a.User), ("indicators", a.Indicators), ("sha256", a.Sha256), ("size", a.Size), ("excerpt", a.Excerpt)),
+                exfil ? def.Int("exfil_weight", 90) : null);
+        }
+    }
+
+    // ---------------------------------------------------------------- H-40
+    /// <summary>Un malware conocido se ejecutó en esta PC y ya no está: el hash que dejó Amcache coincide con una muestra conocida.</summary>
+    private static void H40_KnownMalwareExecuted(RuleContext ctx, HeuristicDefinition def)
+    {
+        foreach (var x in ctx.Snapshot.Executions.Where(x => x.Malicious is not null))
+        {
+            var when = x.LastRun ?? x.FirstRun;
+            ctx.Emit(def, x, x.Key,
+                new()
+                {
+                    ["nombre"] = x.Name, ["familia"] = x.Malicious!.Family ?? $"malware (según {x.Malicious.Source})",
+                    ["fecha"] = when?.ToLocalTime().ToString("dd/MM/yyyy") ?? "una fecha desconocida", ["carpeta"] = FolderLabel(x.Path),
+                },
+                Raw(("path", x.Path), ("sha1", x.Sha1), ("source", x.Malicious.Source), ("family", x.Malicious.Family), ("sources", x.Sources)));
         }
     }
 }

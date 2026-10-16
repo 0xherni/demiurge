@@ -58,6 +58,12 @@ try
         case "diff":
             Output(await client.CallAsync("diff"), Render.Diff);
             break;
+        case "plan":
+            Output(await client.CallAsync("plan"), Render.Plan);
+            break;
+        case "timeline":
+            Output(await client.CallAsync("timeline"), Render.Timeline);
+            break;
         case "answer":
             Output(await client.CallAsync("answer", new { entityKey = Arg(1, "clave"), questionId = Arg(2, "pregunta"), answer = Arg(3, "respuesta") }), n => Render.Card(n));
             break;

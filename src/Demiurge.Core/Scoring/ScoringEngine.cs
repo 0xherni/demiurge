@@ -206,6 +206,9 @@ public sealed class ScoringEngine
                 case EntityKind.Certificate:
                     yield return "remove_certificate";
                     break;
+                case EntityKind.AppIntegrity:
+                    yield return "repair_app";
+                    break;
                 case EntityKind.SystemSetting when f.HeuristicId == "H-11":
                     yield return "remove_exclusion";
                     break;

@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography.Pkcs;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Win32.SafeHandles;
 using Demiurge.Core.Model;
@@ -112,7 +114,7 @@ internal static class WinTrust
             {
                 info.IsSigned = true;
                 info.IsValid = true;
-                FillSigner(info, path);
+                FillSigner(info, path, catalog: false);
                 return info;
             }
 
@@ -123,7 +125,7 @@ internal static class WinTrust
                 info.IsSigned = true;
                 info.IsValid = false;
                 info.Error = $"0x{embedded:X8}";
-                FillSigner(info, path);
+                FillSigner(info, path, catalog: false);
                 return info;
             }
 
@@ -134,7 +136,7 @@ internal static class WinTrust
                 info.IsCatalogSigned = true;
                 info.IsValid = catalog == 0;
                 if (!info.IsValid) info.Error = $"0x{catalog:X8}";
-                if (catalogFile is not null) FillSigner(info, catalogFile);
+                if (catalogFile is not null) FillSigner(info, catalogFile, catalog: true);
                 return info;
             }
 
@@ -151,30 +153,57 @@ internal static class WinTrust
 
     /// <summary>
     /// Apps MSIX (Microsoft Store / apps del sistema): los ejecutables no traen firma propia; la firma es del paquete
-    /// (AppxSignature.p7x), Windows la valida al instalar y la carpeta WindowsApps/SystemApps sólo la escribe TrustedInstaller.
+    /// (AppxSignature.p7x) y Windows la valida al instalar. Sólo se acepta en las carpetas que únicamente escribe
+    /// TrustedInstaller (%ProgramFiles%\WindowsApps y %windir%\SystemApps), y el firmante sale del certificado del
+    /// paquete, no del nombre de la carpeta: una carpeta "WindowsApps" en Temp con un sufijo copiado no vale nada.
     /// </summary>
     private static void FillPackageSignature(SignatureInfo info, string path)
     {
-        string? root = null;
-        foreach (var marker in new[] { @"\WindowsApps\", @"\SystemApps\" })
+        var root = PackageRoot(path);
+        if (root is null) return;
+        try
         {
-            int i = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-            if (i < 0) continue;
-            int start = i + marker.Length;
-            int end = path.IndexOf('\\', start);
-            if (end > start) root = path[..end];
+            var p7x = Path.Combine(root, "AppxSignature.p7x");
+            if (!File.Exists(p7x)) return;
+            var bytes = File.ReadAllBytes(p7x);
+            // Formato: "PKCX" + PKCS#7 (DER).
+            if (bytes.Length < 8 || bytes[0] != (byte)'P' || bytes[1] != (byte)'K' || bytes[2] != (byte)'C' || bytes[3] != (byte)'X') return;
+            var cms = DecodeCms(bytes.AsSpan(4).ToArray());
+            if (cms is null) return;
+            var (signer, issuer, rootThumb) = Inspect(cms);
+            if (signer is null) return;
+            info.IsSigned = true;
+            info.IsValid = true;
+            info.IsCatalogSigned = true;
+            info.Signer = $"{signer} (paquete MSIX)";
+            info.Issuer = issuer;
+            info.RootThumbprint = rootThumb;
+            info.ChainChecked = true;
+            info.Error = null;
         }
-        if (root is null || !File.Exists(Path.Combine(root, "AppxSignature.p7x")) && !File.Exists(Path.Combine(root, "AppxManifest.xml"))) return;
+        catch
+        {
+            // Sin firma de paquete legible: queda como sin firma.
+        }
+    }
 
-        // El sufijo de la carpeta es el hash del publisher: 8wekyb3d8bbwe = Microsoft Corporation, cw5n1h2txyewy = Microsoft Windows.
-        var folder = Path.GetFileName(root);
-        info.IsSigned = true;
-        info.IsValid = true;
-        info.IsCatalogSigned = true;
-        info.Signer = folder.EndsWith("_8wekyb3d8bbwe", StringComparison.OrdinalIgnoreCase) ? "Microsoft Corporation (paquete MSIX)"
-            : folder.EndsWith("_cw5n1h2txyewy", StringComparison.OrdinalIgnoreCase) ? "Microsoft Windows (paquete MSIX)"
-            : $"Paquete MSIX ({folder.Split('_')[0]})";
-        info.Error = null;
+    /// <summary>Carpeta del paquete si el archivo está DENTRO de una carpeta protegida de paquetes; si no, null.</summary>
+    internal static string? PackageRoot(string path)
+    {
+        string full;
+        try { full = Path.GetFullPath(path); } catch { return null; }
+        foreach (var protectedBase in new[]
+                 {
+                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WindowsApps"),
+                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "SystemApps"),
+                 })
+        {
+            var prefix = protectedBase.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            int end = full.IndexOf(Path.DirectorySeparatorChar, prefix.Length);
+            if (end > prefix.Length) return full[..end];
+        }
+        return null;
     }
 
     private static int VerifyEmbedded(string path)
@@ -287,19 +316,105 @@ internal static class WinTrust
         dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_NONE,
     };
 
-    private static void FillSigner(SignatureInfo info, string signedFile)
+    /// <summary>Catálogos (.cat) ya inspeccionados: muchos binarios de Windows comparten el mismo.</summary>
+    private static readonly ConcurrentDictionary<string, (string? Signer, string? Issuer, string? Root)> CatalogCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Firmante y raíz de la cadena, leídos del PKCS#7 del archivo (PE) o del catálogo.</summary>
+    private static void FillSigner(SignatureInfo info, string signedFile, bool catalog)
     {
+        info.ChainChecked = true;
         try
         {
-#pragma warning disable SYSLIB0057
-            using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(signedFile));
-#pragma warning restore SYSLIB0057
-            info.Signer = cert.GetNameInfo(X509NameType.SimpleName, false);
-            info.Issuer = cert.GetNameInfo(X509NameType.SimpleName, true);
+            if (catalog && CatalogCache.TryGetValue(signedFile, out var cached))
+            {
+                (info.Signer, info.Issuer, info.RootThumbprint) = cached;
+                return;
+            }
+            var cms = catalog ? DecodeCms(File.ReadAllBytes(signedFile)) : ReadPeSignature(signedFile);
+            if (cms is null) return;
+            var result = Inspect(cms);
+            (info.Signer, info.Issuer, info.RootThumbprint) = result;
+            if (catalog) CatalogCache[signedFile] = result;
         }
         catch
         {
-            // Sin datos del firmante: no es fatal.
+            // Sin datos del firmante: no es fatal (IsMicrosoft queda en false porque no hay raíz verificada).
         }
+    }
+
+    internal static (string? Signer, string? Issuer, string? Root) Inspect(SignedCms cms)
+    {
+        if (cms.SignerInfos.Count == 0) return (null, null, null);
+        var cert = cms.SignerInfos[0].Certificate;
+        if (cert is null) return (null, null, null);
+        return (cert.GetNameInfo(X509NameType.SimpleName, false), cert.GetNameInfo(X509NameType.SimpleName, true), ChainRoot(cert, cms.Certificates));
+    }
+
+    /// <summary>
+    /// Huella del certificado raíz de la cadena, o null si la cadena no se pudo armar con firmas válidas. No alcanza con
+    /// que la cadena "llegue" a una raíz por nombre: un firmante falso que dice ser emitido por Microsoft arma una cadena
+    /// hasta la raíz real, pero con una firma inválida en el medio. Por eso cualquier error de firma descarta el resultado.
+    /// (WinVerifyTrust ya decidió si la firma es de confianza; acá sólo se identifica QUIÉN es la raíz.)
+    /// </summary>
+    internal static string? ChainRoot(X509Certificate2 leaf, X509Certificate2Collection extra)
+    {
+        using var chain = new X509Chain();
+        var p = chain.ChainPolicy;
+        p.RevocationMode = X509RevocationMode.NoCheck;
+        p.DisableCertificateDownloads = true;
+        p.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority | X509VerificationFlags.IgnoreNotTimeValid |
+                              X509VerificationFlags.IgnoreNotTimeNested | X509VerificationFlags.IgnoreWrongUsage |
+                              X509VerificationFlags.IgnoreInvalidPolicy | X509VerificationFlags.IgnoreCtlNotTimeValid;
+        p.ExtraStore.AddRange(extra);
+        chain.Build(leaf);
+        const X509ChainStatusFlags fatal = X509ChainStatusFlags.NotSignatureValid | X509ChainStatusFlags.Cyclic |
+                                           X509ChainStatusFlags.PartialChain | X509ChainStatusFlags.InvalidBasicConstraints |
+                                           X509ChainStatusFlags.HasNotSupportedCriticalExtension | X509ChainStatusFlags.ExplicitDistrust;
+        foreach (var element in chain.ChainElements)
+            foreach (var st in element.ChainElementStatus)
+                if ((st.Status & fatal) != 0) return null;
+        if (chain.ChainElements.Count == 0) return null;
+        var top = chain.ChainElements[^1].Certificate;
+        return top.SubjectName.RawData.AsSpan().SequenceEqual(top.IssuerName.RawData) ? top.Thumbprint : null;
+    }
+
+    /// <summary>Firma Authenticode embebida: tabla de certificados del PE (directorio de seguridad, entrada 4).</summary>
+    internal static SignedCms? ReadPeSignature(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var br = new BinaryReader(fs);
+        if (fs.Length < 0x100) return null;
+        fs.Position = 0x3C;
+        long lfanew = br.ReadUInt32();
+        if (lfanew < 0x40 || lfanew > fs.Length - 0x100) return null;
+        fs.Position = lfanew;
+        if (br.ReadUInt32() != 0x00004550) return null; // "PE\0\0"
+        fs.Position = lfanew + 24;
+        long dataDirs = br.ReadUInt16() switch { 0x10b => lfanew + 24 + 96, 0x20b => lfanew + 24 + 112, _ => -1 };
+        if (dataDirs < 0 || dataDirs + 5 * 8 > fs.Length) return null;
+        fs.Position = dataDirs + 4 * 8;
+        long offset = br.ReadUInt32();
+        long size = br.ReadUInt32();
+        if (offset == 0 || size < 8 || size > 16 * 1024 * 1024 || offset + size > fs.Length) return null;
+        fs.Position = offset;
+        long length = br.ReadUInt32();
+        br.ReadUInt16(); // revisión
+        if (br.ReadUInt16() != 2 || length <= 8 || length > size) return null; // WIN_CERT_TYPE_PKCS_SIGNED_DATA
+        return DecodeCms(br.ReadBytes((int)(length - 8)));
+    }
+
+    /// <summary>Decodifica un PKCS#7 ignorando el relleno que puede seguir al DER (la tabla se alinea a 8 bytes).</summary>
+    internal static SignedCms? DecodeCms(byte[] blob)
+    {
+        if (blob.Length < 4 || blob[0] != 0x30) return null;
+        int lenBytes = blob[1] < 0x80 ? 0 : blob[1] & 0x7F;
+        if (lenBytes > 4 || blob.Length < 2 + lenBytes) return null;
+        long len = lenBytes == 0 ? blob[1] : 0;
+        for (int i = 0; i < lenBytes; i++) len = (len << 8) | blob[2 + i];
+        long total = 2 + lenBytes + len;
+        if (total > blob.Length) return null;
+        var cms = new SignedCms();
+        cms.Decode(total == blob.Length ? blob : blob.AsSpan(0, (int)total).ToArray());
+        return cms;
     }
 }

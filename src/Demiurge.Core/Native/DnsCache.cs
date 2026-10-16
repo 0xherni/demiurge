@@ -71,7 +71,7 @@ internal static partial class DnsCache
 
     private static List<Entry> ReadIpconfig()
     {
-        var psi = new ProcessStartInfo("ipconfig", "/displaydns")
+        var psi = new ProcessStartInfo(Path.Combine(Util.PathClassifier.System32Dir, "ipconfig.exe"), "/displaydns")
         {
             RedirectStandardOutput = true,
             UseShellExecute = false,

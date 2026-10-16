@@ -1,50 +1,25 @@
 import { useState } from "react";
 import { call } from "../bridge";
 import { ACTIONS, TONE, toneOf } from "../labels";
-import type { ActionResult, EntityDetail, EntityScore } from "../types";
+import type { EntityDetail, EntityScore } from "../types";
+import { Glossed } from "./Glossed";
 import { Confirm, useToast } from "./ui";
+import { useEntityActions } from "./useAction";
 
 /** Tarjeta de las 4 preguntas (08_UX_Explicaciones) con acciones, pregunta al usuario y detalle técnico. */
 export function FindingCard({ item, onChanged }: { item: EntityScore; onChanged: () => void }) {
   const tone = toneOf(item);
   const toast = useToast();
   const [confirm, setConfirm] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, run, answer: reply } = useEntityActions(onChanged);
   const [detail, setDetail] = useState<EntityDetail | null>(null);
 
-  async function runAction(action: string) {
+  function runAction(action: string) {
     setConfirm(null);
-    setBusy(true);
-    try {
-      const r = await call<ActionResult>("action.execute", { action, entityKey: item.scoringKey, confirmed: true });
-      if (!r.success) { toast({ text: r.message, error: true }); return; }
-      toast({
-        text: r.message,
-        undo: r.reversible && r.actionId ? async () => {
-          const u = await call<ActionResult>("action.revert", { id: r.actionId });
-          toast({ text: u.message, error: !u.success });
-          onChanged();
-        } : undefined,
-      });
-      onChanged();
-    } catch (e) {
-      toast({ text: (e as Error).message, error: true });
-    } finally {
-      setBusy(false);
-    }
+    run(action, item.scoringKey);
   }
 
-  async function answer(value: string) {
-    setBusy(true);
-    try {
-      await call("answer", { entityKey: item.scoringKey, questionId: item.pendingQuestion!.questionId, answer: value });
-      onChanged();
-    } catch (e) {
-      toast({ text: (e as Error).message, error: true });
-    } finally {
-      setBusy(false);
-    }
-  }
+  const answer = (value: string) => reply(item.scoringKey, item.pendingQuestion!.questionId, value);
 
   async function loadDetail(open: boolean) {
     if (!open || detail) return;
@@ -66,10 +41,10 @@ export function FindingCard({ item, onChanged }: { item: EntityScore; onChanged:
           {item.path && <span className="path mono selectable">{item.path}</span>}
         </div>
         <dl className="qa">
-          <dt>¿Qué encontramos?</dt><dd>{item.whatWeFound}</dd>
-          <dt>¿Por qué?</dt><dd><ul>{item.whyItCaughtOurAttention.map((w, i) => <li key={i}>{w}</li>)}</ul></dd>
-          <dt>¿Qué tan grave es?</dt><dd>{item.howSerious}</dd>
-          <dt>¿Qué hago?</dt><dd>{item.whatToDo}</dd>
+          <dt>¿Qué encontramos?</dt><dd><Glossed text={item.whatWeFound} /></dd>
+          <dt>¿Por qué?</dt><dd><ul>{item.whyItCaughtOurAttention.map((w, i) => <li key={i}><Glossed text={w} max={2} /></li>)}</ul></dd>
+          <dt>¿Qué tan grave es?</dt><dd><Glossed text={item.howSerious} max={1} /></dd>
+          <dt>¿Qué hago?</dt><dd><Glossed text={item.whatToDo} max={2} /></dd>
         </dl>
         {item.pendingQuestion && (
           <div className="question">

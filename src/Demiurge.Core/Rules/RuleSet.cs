@@ -80,7 +80,8 @@ public sealed class RuleSet
 
     public static RuleSet Load()
     {
-        var external = Path.Combine(DemiurgePaths.Rules, "heuristics.yaml");
+        // Sin crear carpetas: sin permisos (CLI sin elevar) la carpeta de datos no se puede ni abrir, y se usan las reglas incluidas.
+        var external = Path.Combine(DemiurgePaths.Root, "rules", "heuristics.yaml");
         if (File.Exists(external) && Security.DataDirectoryLockdown.CanTrust(external))
         {
             try { return Parse(File.ReadAllText(external)); }

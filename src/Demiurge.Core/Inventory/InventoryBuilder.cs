@@ -25,7 +25,7 @@ public sealed class InventoryRow
 /// </summary>
 public sealed class InventoryBuilder
 {
-    public static readonly string[] Tabs = ["startup", "processes", "connections", "extensions", "software", "accounts", "settings", "certificates", "drivers", "files", "history", "logons", "firewall"];
+    public static readonly string[] Tabs = ["startup", "processes", "connections", "extensions", "software", "accounts", "settings", "certificates", "drivers", "files", "history", "logons", "firewall", "commands"];
 
     private readonly KnowledgeBase _kb;
     private readonly TextCatalog _text;
@@ -72,7 +72,7 @@ public sealed class InventoryBuilder
                     Columns = new() { ["id"] = e.Id, ["versión"] = e.Version, ["habilitada"] = e.Enabled ? "sí" : "no", ["permisos"] = string.Join(", ", e.Permissions.Take(8)) },
                 };
             }),
-            "software" => s.Software.OrderBy(x => x.Name).Select(sw =>
+            "software" => AppIntegrityRows(s, entityScore).Concat(s.Software.OrderBy(x => x.Name).Select(sw =>
             {
                 var kb = _kb.ById(sw.KbId) ?? _kb.MatchSoftware(sw);
                 var score = entityScore.GetValueOrDefault(sw.Key);
@@ -85,7 +85,7 @@ public sealed class InventoryBuilder
                     Score = score,
                     Columns = new() { ["instalado"] = sw.InstallDate?.ToString("dd/MM/yyyy"), ["ubicación"] = sw.InstallLocation, ["categoría"] = sw.Category },
                 };
-            }),
+            })),
             "accounts" => s.Accounts.Select(a => new InventoryRow
             {
                 Key = a.Key, Name = a.Name, Detail = (a.IsAdmin ? "Administrador" : "Usuario estándar") + (a.Enabled ? "" : " · deshabilitada"),
@@ -125,6 +125,7 @@ public sealed class InventoryBuilder
             "history" => History(s, scoreByKey, entityScore),
             "logons" => Logons(s, entityScore),
             "firewall" => Firewall(s, scoreByKey, entityScore),
+            "commands" => Commands(s, entityScore),
             _ => [],
         };
 
@@ -261,10 +262,62 @@ public sealed class InventoryBuilder
                 };
             });
 
+    /// <summary>Comandos escritos en Win+R, en la barra del Explorador y (sólo los que descargan o ejecutan algo) en PowerShell.</summary>
+    private static IEnumerable<InventoryRow> Commands(ScanSnapshot s, Dictionary<string, int> entityScore)
+    {
+        var rows = s.Commands.OrderBy(c => c.Source == "powershell").ThenBy(c => c.Position).Select(c =>
+        {
+            var score = entityScore.GetValueOrDefault(c.Key);
+            var where = c.Source switch { "run" => "Ejecutar (Win+R)", "explorer" => "Barra del Explorador", _ => "PowerShell" };
+            return new InventoryRow
+            {
+                Key = c.Key, Name = c.DisplayName, Path = c.Command,
+                Detail = $"{where} · {c.User}" + (c.When is null ? "" : $" · {c.When.Value.ToLocalTime():dd/MM/yyyy HH:mm}"),
+                WhatIsIt = c.Source switch
+                {
+                    "run" => "Algo que se escribió o pegó en la ventana Ejecutar (Win+R).",
+                    "explorer" => "Un comando que se escribió o pegó en la barra de direcciones del Explorador de archivos.",
+                    _ => "Un comando de PowerShell que usa internet o ejecuta algo (del resto del historial no guardamos nada).",
+                },
+                IsItNormal = score > 0
+                    ? "Descarga o ejecuta algo de internet: normal sólo si lo escribiste vos sabiendo qué hace. Si te lo pidió una página, es una estafa."
+                    : "Sí, si lo escribiste vos.",
+                Status = StatusFor(score, null),
+                Score = score,
+                Columns = new() { ["usuario"] = c.User },
+            };
+        }).ToList();
+        if (rows.Count == 0)
+            rows.Add(new InventoryRow { Key = "commands-none", Name = "No hay comandos registrados", WhatIsIt = "No se escribió nada en Ejecutar (Win+R) ni comandos de descarga en PowerShell.", IsItNormal = "Sí.", Status = "ok", Columns = new() });
+        return rows;
+    }
+
+    /// <summary>Archivos de aplicaciones que los ladrones de cuentas modifican (Discord): primero en la pestaña Programas.</summary>
+    private static IEnumerable<InventoryRow> AppIntegrityRows(ScanSnapshot s, Dictionary<string, int> entityScore) =>
+        s.AppIntegrity.Select(a =>
+        {
+            var score = entityScore.GetValueOrDefault(a.Key);
+            return new InventoryRow
+            {
+                Key = a.Key, Name = $"{a.App}: " + (a.Status switch { "modified" => "modificado", "mod" => $"con {a.ModName}", _ => "sin modificar" }),
+                Detail = a.User is null ? null : $"Usuario {a.User}", Path = a.Path,
+                WhatIsIt = $"Archivo con el que arranca {a.App}. En una instalación limpia tiene una sola línea.",
+                IsItNormal = a.Status switch
+                {
+                    "modified" => "No: tiene código agregado (" + (a.Indicators.Count == 0 ? "desconocido" : string.Join(", ", a.Indicators)) + "). Así se roban las sesiones de Discord.",
+                    "mod" => $"Sí: {a.ModName} lo modifica de una forma conocida. Si no lo instalaste vos, revisalo.",
+                    _ => "Sí: está igual que recién instalado.",
+                },
+                Status = a.Status == "modified" ? (score > 0 ? StatusFor(score, null) : "review") : a.Status == "mod" ? "info" : "ok",
+                Score = score,
+                Columns = new(),
+            };
+        });
+
     private static string StatusFor(int score, KnowledgeEntry? kb) =>
         score >= 60 ? "danger" : score >= 20 ? "review" : kb?.Risk == "question" ? "question" : kb?.Risk is "pup" or "suspicious" ? "review" : score > 0 ? "info" : "ok";
 
-    private static string TypeLabel(PersistenceType t) => t switch
+    internal static string TypeLabel(PersistenceType t) => t switch
     {
         PersistenceType.RunKey => "Registro (Run)",
         PersistenceType.RunOnce => "Registro (RunOnce)",

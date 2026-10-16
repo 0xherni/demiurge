@@ -1,7 +1,6 @@
 // Puente con el motor (C#) a través de WebView2. Cada pedido lleva un id; la respuesta vuelve con el mismo id.
 // Los eventos (progreso del escaneo) llegan sin id. Fuera de la app (vite dev en un navegador) se usa un mock.
 
-import { mockCall } from "./mock";
 
 type Listener = (data: unknown) => void;
 
@@ -33,7 +32,12 @@ host?.addEventListener("message", (e) => {
 export const insideApp = host !== undefined;
 
 export function call<T = unknown>(op: string, args?: Record<string, unknown>): Promise<T> {
-  if (!host) return mockCall(op, args, emit) as Promise<T>;
+  if (!host) {
+    // Fuera de la app (vite dev en un navegador) se usan datos de ejemplo. En el build de producción esta rama se
+    // elimina y los datos de ejemplo no se empaquetan.
+    if (!import.meta.env.DEV) return Promise.reject(new Error("Abrí Demiurge desde su acceso directo."));
+    return import("./mock").then((m) => m.mockCall(op, args, emit) as Promise<T>);
+  }
   const id = crypto.randomUUID();
   return new Promise<T>((resolve, reject) => {
     pending.set(id, { resolve: resolve as (v: unknown) => void, reject });

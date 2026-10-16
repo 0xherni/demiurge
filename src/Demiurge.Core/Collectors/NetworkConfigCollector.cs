@@ -109,7 +109,7 @@ public sealed class NetworkConfigCollector : ICollector
     {
         try
         {
-            var psi = new ProcessStartInfo("netsh", "winhttp show proxy")
+            var psi = new ProcessStartInfo(Path.Combine(PathClassifier.System32Dir, "netsh.exe"), "winhttp show proxy")
             {
                 RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true,
             };
