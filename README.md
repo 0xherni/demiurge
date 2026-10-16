@@ -21,6 +21,18 @@ It is a **visibility and second-opinion tool, not an antivirus**: no real-time p
 - **Explains and guides**: verdict, finding cards, a cleanup plan, a "what happened" timeline (real timestamps, only links events that involve the same file), a full inventory and a diff against the previous scan.
 - **Acts only with confirmation, and reversibly**: disable startup entries, quarantine (never delete), remove extensions, restore browser/proxy/hosts, remove Defender exclusions or certificates, repair Discord. Everything can be undone except killing a process.
 
+## Status
+
+**Discontinued (October 2026), beta.** Calibrated for false positives on a real PC without admin rights. Not verified: full behavior installed and elevated, actions on a real system, and detection against real malware in VMs. The installer is unsigned (SmartScreen will warn).
+
+The last build is [`v0.2.0-beta`](https://github.com/0xherni/demiurge/releases/tag/v0.2.0-beta):
+
+| File | SHA-256 |
+|---|---|
+| `DemiurgeSetup.msi` | `e72cb0cfd0c954906af51b25877436f6c2d1c4dc77e64ba0ff6bb1d47ce23047` |
+
+Check it with `Get-FileHash .\DemiurgeSetup.msi` in PowerShell.
+
 ## Connected tools
 
 | Tool | Used for |
@@ -51,7 +63,3 @@ dotnet build Demiurge.sln
 dotnet test Demiurge.sln
 .\build-installer.ps1        # tests + self-contained publish + artifacts\DemiurgeSetup.msi
 ```
-
-## Status
-
-**Discontinued (October 2026), beta.** Calibrated for false positives on a real PC without admin rights. Not verified: full behavior installed and elevated, actions on a real system, and detection against real malware in VMs. The installer is unsigned (SmartScreen will warn).
