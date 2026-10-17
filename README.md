@@ -1,7 +1,7 @@
 # Demiurge
 
 > [!WARNING]
-> **I recommend not downloading or installing it.** Demiurge went through a security audit and every issue found was fixed ([`SECURITY-AUDIT.md`](SECURITY-AUDIT.md)), but that does not make it safe: it runs **with administrator rights** and reads, analyzes and modifies sensitive parts of Windows (startup, registry, browsers, certificates, accounts, antivirus). Any remaining bug in software with that level of access can be exploited or break the system. The project is also **discontinued**, unsigned, and its detection was never measured against real malware. It is published as a portfolio project, to read the code.
+> **Portfolio project, discontinued.** Demiurge runs with administrator rights, the installer is unsigned, and its detection was never measured against real malware. Read the code rather than installing it on a machine you care about. It went through a security audit and every issue found was fixed ([`SECURITY-AUDIT.md`](SECURITY-AUDIT.md)).
 
 ## What it is
 
@@ -20,6 +20,20 @@ It is a **visibility and second-opinion tool, not an antivirus**: no real-time p
 - **Scores per program, not per event**: 40 rules; one weak signal stays informational, several together escalate. When engines disagree, the alarm is lowered and the card says so.
 - **Explains and guides**: verdict, finding cards, a cleanup plan, a "what happened" timeline (real timestamps, only links events that involve the same file), a full inventory and a diff against the previous scan.
 - **Acts only with confirmation, and reversibly**: disable startup entries, quarantine (never delete), remove extensions, restore browser/proxy/hosts, remove Defender exclusions or certificates, repair Discord. Everything can be undone except killing a process.
+
+## Screenshots
+
+These use the UI's built-in sample data (`src/Demiurge.App/web/src/mock.ts`), not a real scan: a fake "crack" that drops a Metasploit Meterpreter payload, which later runs Mimikatz. The UI is in Spanish.
+
+| | |
+|---|---|
+| ![Verdict](docs/screenshots/home.png) | ![Finding card](docs/screenshots/findings.png) |
+| **Verdict.** What was found and what to do first. | **Finding card.** What, why, how serious, what to do. |
+| ![Technical view](docs/screenshots/mimikatz.png) | ![Timeline](docs/screenshots/timeline.png) |
+| **Technical view.** Rules that fired, raw data, ATT&CK. | **Timeline.** Real timestamps, linked when it's the same file. |
+
+![Cleanup plan](docs/screenshots/plan.png)
+**Cleanup plan.** The findings turned into ordered, reversible steps.
 
 ## Status
 

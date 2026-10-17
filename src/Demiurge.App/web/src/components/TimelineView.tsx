@@ -34,7 +34,7 @@ export function TimelineView({ version, openFinding }: { version: number; openFi
 
   const Event = ({ e }: { e: TimelineEvent }) => (
     <li className="tev">
-      <span className="tt tnum">{e.time ? new Date(e.time).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }) : "—"}</span>
+      <span className="tt tnum">{e.time ? new Date(e.time).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) : "—"}</span>
       <span className="tdot" style={{ background: LEVEL_COLOR[e.level] }} />
       <div className="tw">
         <span className="tk">{KIND_LABEL[e.kind] ?? e.kind}</span>

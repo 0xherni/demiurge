@@ -49,7 +49,7 @@ export function relativeDate(iso?: string): string {
   if (diff < 90) return "recién";
   if (diff < 3600) return `hace ${Math.round(diff / 60)} min`;
   const sameDay = new Date().toDateString() === d.toDateString();
-  const time = d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+  const time = d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   if (sameDay) return `hoy ${time}`;
   return `${d.toLocaleDateString("es-AR", { weekday: "short", day: "2-digit", month: "2-digit" })} ${time}`;
 }
